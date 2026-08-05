@@ -76,13 +76,46 @@ def py_snippet(script: str, patches: dict, call: str, env=None, raw: dict | None
     run([sys.executable, "-c", "\n".join(lines)], env=env)
 
 
-def ctx_bbox_roots(a) -> str:
-    """BBOX_ROOTS expression pointing at data/ and work/ instead of the dev machine."""
+def ctx_patches(a) -> dict:
+    """Repoint ctx_builder's hard-coded roots (bbox + video) at data/ and work/."""
     syn = str(a.data / "synwts/data/annotations/bbox_annotated")
     t = str(a.work / "test_root/data/annotations")
-    return ("{'train': [Path(%r)], 'val': [Path(%r)], "
-            "'test': [Path(%r + '/bbox_annotated'), Path(%r + '/bbox_generated')]}"
-            % (syn, syn, t, t))
+    vids = (str(a.data / "synwts/data/videos"), str(a.work / "test_root/data/videos"))
+    return {"BBOX_ROOTS": ("{'train': [Path(%r)], 'val': [Path(%r)], "
+                           "'test': [Path(%r + '/bbox_annotated'), Path(%r + '/bbox_generated')]}"
+                           % (syn, syn, t, t)),
+            "BBoxIndex.VIDEO_ROOTS": "[Path(%r), Path(%r)]" % vids}
+
+
+def flatten_synwts_for_caption(a) -> Path:
+    """SynWTS ships a nested ``normal_trimmed/`` group; the deployed caption
+    preprocessing saw those scenarios flattened to the split top level (the
+    preprocessor skips the container dir by name). Build that flattened view
+    with symlinks under work/ — raw data/ is never modified."""
+    flat = a.work / "synwts_flat/data"
+    if flat.exists():
+        shutil.rmtree(flat.parent)
+    raw = a.data / "synwts/data"
+
+    def merge(src: Path, dst: Path):
+        dst.mkdir(parents=True, exist_ok=True)
+        for e in src.iterdir():
+            if e.name == "normal_trimmed":
+                for c in e.iterdir():
+                    (dst / c.name).symlink_to(c.resolve())
+            else:
+                (dst / e.name).symlink_to(e.resolve())
+
+    for split in ("train", "val"):
+        if (raw / "videos" / split).exists():
+            merge(raw / "videos" / split, flat / "videos" / split)
+        if (raw / "annotations/caption" / split).exists():
+            merge(raw / "annotations/caption" / split, flat / "annotations/caption" / split)
+    for sub in ("annotations/bbox_annotated", "annotations/vqa"):
+        if (raw / sub).exists():
+            (flat / sub).parent.mkdir(parents=True, exist_ok=True)
+            (flat / sub).symlink_to((raw / sub).resolve())
+    return flat
 
 
 def sharded_predict(samples_json, out_probs, out_answers, adapter, quant,
@@ -96,6 +129,13 @@ def sharded_predict(samples_json, out_probs, out_answers, adapter, quant,
     workdir.mkdir(parents=True, exist_ok=True)
     data = json.load(open(samples_json))
     assert shard % batch == 0
+    prov = {"adapter": str(adapter), "quant": quant, "qtypes": qtypes,
+            "batch": batch, "shard": shard, "n": len(data)}
+    pv = workdir / "provenance.json"
+    if pv.exists() and json.load(open(pv)) != prov:
+        sys.exit(f"shard cache {workdir} was produced with a different config "
+                 f"({json.load(open(pv))}) — delete the folder to re-predict")
+    json.dump(prov, open(pv, "w"))
     env = {"AICC26_QWEN35_QUANT": quant, "AICC26_QWEN35_ADAPTER": adapter,
            "QWEN35_BATCH": batch, **(env_extra or {})}
     shards = [(i, data[i:i + shard]) for i in range(0, len(data), shard)]
@@ -169,7 +209,10 @@ def st_prep_train(a):
            "AICC26_WORK_ROOT_QWEN7B": a.work / "train_prep/vqa",
            "AICC26_WORK_ROOT_QWEN7B_CAP": a.work / "train_prep/caption"}
     run([sys.executable, CODE / "preprocess_vqa.py", "--workers", a.workers, "--force"], env=env)
-    run([sys.executable, CODE / "preprocess_caption.py", "--workers", a.workers, "--force"], env=env)
+    # caption uses the flattened view (normal_trimmed lifted) to match the deployed data prep
+    flat = flatten_synwts_for_caption(a)
+    run([sys.executable, CODE / "preprocess_caption.py", "--workers", a.workers, "--force"],
+        env={**env, "AICC26_DATA_ROOT": flat})
 
 
 def st_train_base(a):
@@ -219,7 +262,7 @@ def st_train_ctx(a):
                "build(%r, %r, 'train', None, 'both', True)" % (
                    str(a.work / "train_prep/vqa/processed/vqa_train.json"),
                    str(d / "vqa_train.json")),
-               raw={"BBOX_ROOTS": ctx_bbox_roots(a)})
+               raw=ctx_patches(a))
     cmd = [sys.executable, "-u", CODE / "run_qwen35_vqa.py", "train"]
     if a.train_limit:
         cmd += ["--limit", a.train_limit]
@@ -234,7 +277,7 @@ def st_predict_ctx(a):
                    str(a.work / "test_prep/vqa/processed/vqa_val.json"),
                    str(d / "vqa_test_ctx.json"),
                    str(a.work / "vqa/answers_wsd2.json")),
-               raw={"BBOX_ROOTS": ctx_bbox_roots(a)})
+               raw=ctx_patches(a))
     sharded_predict(d / "vqa_test_ctx.json", a.work / "probs/ctx_probs.json",
                     a.work / "vqa/ctx_answers_unused.json",
                     a.work / "adapters/vqa_lora_ctx", "8bit", qtypes=SPATIAL)
@@ -248,7 +291,12 @@ def st_compose_vqa(a):
                    str(a.work / "vqa/answers_ctx.json"), set(SPATIAL.split(",")))
     final = a.work / "vqa/answers_ctx.json"
     bundle = a.work / "probs/bundle_probs.json"
-    if bundle.exists():  # optional reality-transfer route (see README appendix)
+    if bundle.exists() and not a.with_bundle:
+        print("[e2e] bundle probs present but --with-bundle not set -> ignored")
+    if a.with_bundle and not bundle.exists():
+        sys.exit(f"--with-bundle set but {bundle} not found (produce it with "
+                 "code/cosmos_restyle_prep.py + dr_prep.py + cosmos_night.sh)")
+    if a.with_bundle and bundle.exists():  # optional reality-transfer route
         SP = set(SPATIAL.split(",")); VIT = SP | {"action"}
         TGT = {"direction", "speed", "attention", "distance", "action"}
         samples = json.load(open(T))
@@ -276,6 +324,25 @@ def st_compose_vqa(a):
         print("[e2e] bundle probs found -> reality-transfer route applied")
     else:
         print("[e2e] no bundle probs (optional stage skipped) -> final = ctx stage")
+    # ---- final validation: id coverage + every answer inside its own options
+    meta = {s_["id"]: s_ for s_ in json.load(open(T))}
+    ans = json.load(open(final))
+    ids = [x["id"] for x in ans]
+    if len(ids) != len(set(ids)) or set(ids) != set(meta):
+        sys.exit(f"VALIDATION FAIL: id mismatch (answers {len(set(ids))} vs metadata {len(meta)})")
+    p8 = json.load(open(a.work / "probs/base_8bit_probs.json"))
+    clamped = 0
+    for x in ans:
+        opts = meta[x["id"]]["options"]
+        n = len(opts)
+        if "abcd".index(x["correct"]) >= n:  # never seen on the deployed model; guard for retrains
+            pr = p8.get(x["id"], [0.25] * 4)
+            x["correct"] = "abcd"[max(range(n), key=lambda i: pr[i])]
+            clamped += 1
+    if clamped:
+        json.dump(ans, open(final, "w"))
+    print(f"[e2e] validation: {len(ids):,} answers, ids match metadata, "
+          f"{clamped} out-of-range answers clamped")
     a.out.mkdir(parents=True, exist_ok=True)
     shutil.copy(final, a.out / "subtask2_vqa.json")
     print(f"[e2e] FINAL VQA -> {a.out / 'subtask2_vqa.json'}")
@@ -348,6 +415,20 @@ def st_stitch(a):
         fs4.cmd_test(str(w / "base_dir"), str(w / "v4"), str(a.work / "vqa/answers_wsd.json"))
         fs5.cmd_test(str(w / "v4"), str(w / "v5"), str(a.work / "vqa/answers_wsd2.json"),
                      fs5.V5A)
+        # ---- final validation: every (scenario, phase) from the caption metadata present
+        cap = json.load(open(w / "v5/subtask1_captioning.json"))
+        need = {(s_["scenario"], str(s_["phase_label"]))
+                for s_ in json.load(open(a.work / "test_prep/caption/processed/caption_val.json"))}
+        have = {(scn, str((e.get("labels") or [""])[0]))
+                for scn, es in cap.items() for e in es}
+        missing = need - have
+        if missing:
+            sys.exit(f"VALIDATION FAIL: {len(missing)} caption (scenario, phase) missing, "
+                     f"e.g. {sorted(missing)[:3]}")
+        empty = sum(1 for es in cap.values() for e in es
+                    for ch in ("caption_pedestrian", "caption_vehicle") if not e.get(ch))
+        print(f"[e2e] validation: {len(cap)} scenarios, all (scenario, phase) covered, "
+              f"{empty} empty caption fields")
         a.out.mkdir(parents=True, exist_ok=True)
         shutil.copy(w / "v5/subtask1_captioning.json", a.out / "subtask1_captioning.json")
         print(f"[e2e] FINAL CAPTION -> {a.out / 'subtask1_captioning.json'}")
@@ -373,6 +454,8 @@ def main():
     ap.add_argument("--train-limit", type=int, default=0, help="smoke: cap train samples")
     ap.add_argument("--caption-limit", type=int, default=0, help="smoke: cap caption samples")
     ap.add_argument("--quant-caption", default="bf16", choices=["bf16", "8bit", "4bit"])
+    ap.add_argument("--with-bundle", action="store_true",
+                    help="route reality-transfer probs (requires work/probs/bundle_probs.json)")
     ap.add_argument("--list", action="store_true")
     a = ap.parse_args()
     done = a.work / ".done"; done.mkdir(parents=True, exist_ok=True)

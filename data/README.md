@@ -24,3 +24,16 @@ Sources
   (~2.5 GB, 846 videos) — the download root is the `synwts/` folder above.
 - Public test + task package: distributed by the AI City Challenge organizers
   (Track 2). `WTS_DATASET_PUBLIC_TEST` is ~21 GB (664 videos).
+
+Docker note: the container only sees `/pkg`, so symlinks pointing outside the
+package will not resolve. Either place the real directories here, or mount
+each dataset explicitly:
+
+```bash
+docker run --rm --gpus all --shm-size 8g \
+  -v "$PWD:/pkg" -v team24-hf:/root/.cache/huggingface \
+  -v /path/to/synwts:/pkg/data/synwts:ro \
+  -v /path/to/WTS_DATASET_PUBLIC_TEST:/pkg/data/WTS_DATASET_PUBLIC_TEST:ro \
+  -v /path/to/WTS_TASK:/pkg/data/WTS_TASK:ro \
+  team24-e2e
+```
