@@ -2,8 +2,8 @@
 work/
 submissions/*
 !submissions/.gitkeep
-# datasets are user-provided (see data/README.md)
+# datasets are user-provided (see README.md §2)
 data/*
-!data/README.md
+!data/.gitkeep
 __pycache__/
 *.pyc

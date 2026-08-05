@@ -3,7 +3,7 @@
 
 No pretrained adapters, no precomputed probs, no shipped answers. Everything is rebuilt
 from the SynWTS training set and the official public-test package placed under data/
-(see data/README.md for the expected layout).
+(see README.md §2 for the expected layout).
 
     python code/run_e2e.py                      # run every stage in order (resumable)
     python code/run_e2e.py --stages prep_test   # run a single stage
@@ -106,15 +106,14 @@ def flatten_synwts_for_caption(a) -> Path:
             else:
                 (dst / e.name).symlink_to(e.resolve())
 
+    # every annotation tree nests normal_trimmed under the split dir; frame jobs
+    # are gated on per-scenario bbox JSONs, so bbox must be lifted too
     for split in ("train", "val"):
-        if (raw / "videos" / split).exists():
-            merge(raw / "videos" / split, flat / "videos" / split)
-        if (raw / "annotations/caption" / split).exists():
-            merge(raw / "annotations/caption" / split, flat / "annotations/caption" / split)
-    for sub in ("annotations/bbox_annotated", "annotations/vqa"):
-        if (raw / sub).exists():
-            (flat / sub).parent.mkdir(parents=True, exist_ok=True)
-            (flat / sub).symlink_to((raw / sub).resolve())
+        for sub in ("videos", "annotations/caption", "annotations/vqa",
+                    "annotations/bbox_annotated/pedestrian",
+                    "annotations/bbox_annotated/vehicle"):
+            if (raw / sub / split).exists():
+                merge(raw / sub / split, flat / sub / split)
     return flat
 
 
@@ -168,7 +167,7 @@ def st_prep_test(a):
     inf = a.data / "WTS_DATASET_PUBLIC_TEST"
     for p in (ext / "SubTask2-VQA/WTS_VQA_PUBLIC_TEST.json", inf / "videos/test/public"):
         if not p.exists():
-            sys.exit(f"missing input: {p}\nsee data/README.md for the expected layout")
+            sys.exit(f"missing input: {p}\nsee README.md §2 for the expected layout")
     bbox = ext / "SubTask1-Caption/WTS_DATASET_PUBLIC_TEST_BBOX"
     if not bbox.exists():
         z = Path(str(bbox) + ".zip")

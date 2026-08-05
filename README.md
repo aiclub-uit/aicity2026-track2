@@ -13,14 +13,32 @@ no precomputed predictions.
 
 ## 2. Data
 
-Place (or symlink) the datasets under `data/` as described in
-[data/README.md](data/README.md):
+Place the three datasets under `data/` (nothing in `data/` ships with the package):
 
 ```
-data/synwts/                   SynWTS training set  (HF: mlcglab/synwts, ~2.5 GB)
-data/WTS_DATASET_PUBLIC_TEST/  official public-test videos + annotations (~21 GB)
-data/WTS_TASK/                 official task package (BBOX zip + VQA json)
+data/
+├── synwts/                          # SynWTS training set
+│   └── data/
+│       ├── annotations/{bbox_annotated,caption,vqa}/
+│       └── videos/{train,val}/
+├── WTS_DATASET_PUBLIC_TEST/         # official public-test package
+│   ├── annotations/caption/test/public_challenge/
+│   ├── videos/test/public/
+│   └── external/BDD_PC_5K/{annotations,videos}/
+└── WTS_TASK/
+    └── EXTERNAL_WTS_DATASET_TEST/
+        ├── SubTask1-Caption/WTS_DATASET_PUBLIC_TEST_BBOX.zip   # auto-extracted
+        └── SubTask2-VQA/WTS_VQA_PUBLIC_TEST.json
 ```
+
+- SynWTS (~2.5 GB): `huggingface_hub.snapshot_download("mlcglab/synwts", repo_type="dataset")`
+  — the download root is `data/synwts/`.
+- Public test + task package (~21 GB): distributed by the AI City Challenge
+  organizers (Track 2).
+
+If a dataset lives elsewhere, do not symlink it (links pointing outside the
+package do not resolve in the container) — bind-mount it instead, e.g.
+`-v /path/to/synwts:/pkg/data/synwts:ro` added to the `docker run` below.
 
 ## 3. Run
 

@@ -5,7 +5,7 @@
 #     -v "$PWD:/pkg" -v team24-hf:/root/.cache/huggingface team24-e2e
 #
 # The package directory is bind-mounted at /pkg with data/ populated
-# (see data/README.md); outputs land in /pkg/work and /pkg/submissions.
+# (see README.md §2); outputs land in /pkg/work and /pkg/submissions.
 FROM pytorch/pytorch:2.11.0-cuda12.8-cudnn9-runtime
 
 # java is required by pycocoevalcap's METEOR scorer (caption DPO stage)
