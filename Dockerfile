@@ -8,8 +8,11 @@
 # (see README.md §2); outputs land in /pkg/work and /pkg/submissions.
 FROM pytorch/pytorch:2.11.0-cuda12.8-cudnn9-runtime
 
-# java is required by pycocoevalcap's METEOR scorer (caption DPO stage)
-RUN apt-get update && apt-get install -y --no-install-recommends default-jre-headless \
+# java: pycocoevalcap's METEOR scorer (caption DPO stage)
+# ffmpeg: ctx_builder probes video resolution via ffprobe (silent 1920x1080
+#         fallback otherwise, which mis-normalizes bbox evidence on 720p videos)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    default-jre-headless ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # pinned to the versions the pipeline was verified with

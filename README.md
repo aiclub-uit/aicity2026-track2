@@ -8,7 +8,9 @@ no precomputed predictions.
 ## 1. Requirements
 
 - Docker with the NVIDIA Container Toolkit (`--gpus all`)
-- 1 GPU with ≥ 32 GB VRAM (bf16 training peaks ~29 GB; the original run used 96 GB)
+- 1 NVIDIA GPU, Ampere or newer (compute capability ≥ 8.0 — bf16 training; the
+  PyTorch 2.11 cu128 binaries no longer ship Volta kernels), ≥ 32 GB VRAM
+  (bf16 training peaks ~29 GB; the original run used 96 GB)
 - ~60 GB free disk (datasets + frames + adapters + HF model cache)
 
 ## 2. Data
@@ -31,8 +33,9 @@ data/
         └── SubTask2-VQA/WTS_VQA_PUBLIC_TEST.json
 ```
 
-- SynWTS (~2.5 GB): `huggingface_hub.snapshot_download("mlcglab/synwts", repo_type="dataset")`
-  — the download root is `data/synwts/`.
+- SynWTS (~2.5 GB): `huggingface_hub.snapshot_download("mlcglab/synwts",
+  repo_type="dataset", revision="9d6e7abce9a906e3e9bb6a2941dcce8b128654cf")`
+  — the download root is `data/synwts/` (revision pinned to the version we trained on).
 - Public test + task package (~21 GB): distributed by the AI City Challenge
   organizers (Track 2).
 

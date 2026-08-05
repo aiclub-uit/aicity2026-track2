@@ -128,8 +128,11 @@ def sharded_predict(samples_json, out_probs, out_answers, adapter, quant,
     workdir.mkdir(parents=True, exist_ok=True)
     data = json.load(open(samples_json))
     assert shard % batch == 0
+    aw = Path(adapter) / "adapter_model.safetensors"
     prov = {"adapter": str(adapter), "quant": quant, "qtypes": qtypes,
-            "batch": batch, "shard": shard, "n": len(data)}
+            "batch": batch, "shard": shard, "n": len(data),
+            # fingerprint so a retrained adapter at the same path invalidates the cache
+            "adapter_fp": [aw.stat().st_size, int(aw.stat().st_mtime)] if aw.exists() else None}
     pv = workdir / "provenance.json"
     if pv.exists() and json.load(open(pv)) != prov:
         sys.exit(f"shard cache {workdir} was produced with a different config "
@@ -335,6 +338,8 @@ def st_compose_vqa(a):
         opts = meta[x["id"]]["options"]
         n = len(opts)
         if "abcd".index(x["correct"]) >= n:  # never seen on the deployed model; guard for retrains
+            # 8-bit base probs as neutral tiebreak — per-id route provenance is not
+            # tracked, and this path has never fired on real data (0/19,624)
             pr = p8.get(x["id"], [0.25] * 4)
             x["correct"] = "abcd"[max(range(n), key=lambda i: pr[i])]
             clamped += 1
@@ -420,14 +425,19 @@ def st_stitch(a):
                 for s_ in json.load(open(a.work / "test_prep/caption/processed/caption_val.json"))}
         have = {(scn, str((e.get("labels") or [""])[0]))
                 for scn, es in cap.items() for e in es}
-        missing = need - have
-        if missing:
-            sys.exit(f"VALIDATION FAIL: {len(missing)} caption (scenario, phase) missing, "
-                     f"e.g. {sorted(missing)[:3]}")
+        pairs = [(scn, str((e.get("labels") or [""])[0]))
+                 for scn, es in cap.items() for e in es]
+        have = set(pairs)
+        missing, extra, dup = need - have, have - need, len(pairs) - len(have)
         empty = sum(1 for es in cap.values() for e in es
-                    for ch in ("caption_pedestrian", "caption_vehicle") if not e.get(ch))
-        print(f"[e2e] validation: {len(cap)} scenarios, all (scenario, phase) covered, "
-              f"{empty} empty caption fields")
+                    for ch in ("caption_pedestrian", "caption_vehicle")
+                    if not isinstance(e.get(ch), str) or not e[ch].strip())
+        if missing or extra or dup or empty:
+            sys.exit(f"VALIDATION FAIL: {len(missing)} missing / {len(extra)} extra "
+                     f"(scenario, phase), {dup} duplicates, {empty} empty caption fields; "
+                     f"e.g. {sorted(missing or extra)[:3]}")
+        print(f"[e2e] validation: {len(cap)} scenarios, {len(pairs)} phase entries, "
+              f"all covered, none empty")
         a.out.mkdir(parents=True, exist_ok=True)
         shutil.copy(w / "v5/subtask1_captioning.json", a.out / "subtask1_captioning.json")
         print(f"[e2e] FINAL CAPTION -> {a.out / 'subtask1_captioning.json'}")
