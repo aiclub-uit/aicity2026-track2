@@ -59,8 +59,9 @@ the run is resumable (append `--list` for stage status).
 
 ## 4. Expected results
 
+Target scores on the public test set: **VQA accuracy ≈ 84.7**, **caption S1 ≈ 29.9–30.0**.
 GPU LoRA training and sampling are not bit-exact across hardware/library
-versions, so scores land within a small band of the leaderboard values
+versions, so scores land within a small band of these values
 (±0.1–0.2 accuracy / S1 in our re-runs).
 
 ## 5. Code map
