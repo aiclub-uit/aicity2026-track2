@@ -1,0 +1,9 @@
+# runtime outputs — never committed
+work/
+submissions/*
+!submissions/.gitkeep
+# datasets are user-provided (see data/README.md)
+data/*
+!data/README.md
+__pycache__/
+*.pyc
