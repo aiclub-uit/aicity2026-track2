@@ -16,10 +16,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # pinned to the versions the pipeline was verified with
+# (nltk is only reached via the optional QWEN35_PRED_NCAND>1 MBR path)
 RUN pip install --no-cache-dir \
     transformers==5.14.1 peft==0.20.0 bitsandbytes==0.50.0 accelerate==1.14.0 \
     datasets==5.0.1 trl==1.9.2 qwen-vl-utils==0.0.14 pycocoevalcap==1.2 \
-    opencv-python-headless==5.0.0.93 tqdm==4.68.0
+    opencv-python-headless==5.0.0.93 tqdm==4.68.0 nltk==3.9.2
 
 # the training scripts only setdefault HF_HOME — pin it so the team24-hf
 # volume (mounted at /root/.cache/huggingface) actually caches the checkpoint

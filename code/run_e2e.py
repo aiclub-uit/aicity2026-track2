@@ -174,6 +174,8 @@ def st_prep_test(a):
     bbox = ext / "SubTask1-Caption/WTS_DATASET_PUBLIC_TEST_BBOX"
     if not bbox.exists():
         z = Path(str(bbox) + ".zip")
+        if not z.exists():
+            sys.exit(f"missing input: {z}\nsee README.md §2 for the expected layout")
         print(f"[e2e] extracting {z.name}")
         zipfile.ZipFile(z).extractall(bbox.parent)
     troot = a.work / "test_root"
