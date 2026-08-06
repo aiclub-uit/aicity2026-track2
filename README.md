@@ -98,3 +98,15 @@ versions, so scores land within a small band of these values
 | `fact_stitch.py`, `fact_stitch3/4/5.py` | caption fact correction waves v2–v5 |
 | `harmonize_attrs.py` | cross-phase attribute harmonization (val lever) |
 | `cosmos_restyle_prep.py`, `dr_prep.py`, `*.sh` | optional bundle route + historical deploy pipelines |
+
+## Note on BDD_PC_5K
+
+The challenge rules state the BDD_PC_5K subset is not used for evaluation.
+However, the official public-test files do contain it (15,123 of the 19,624
+VQA questions and 375 of the 459 caption scenarios are BDD), so the pipeline
+answers **everything** in `WTS_VQA_PUBLIC_TEST.json` and captions every
+scenario in the test package — the submission ID set must match the official
+files exactly. Entries outside the scored ("internal"/"main" WTS) subset are
+simply ignored by the evaluator. Training complies with the usage rule:
+all models are fine-tuned **only** on the synthetic SynWTS set; no BDD or
+real-world WTS data is used for training.
