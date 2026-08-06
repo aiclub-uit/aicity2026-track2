@@ -1,24 +1,4 @@
 #!/usr/bin/env python
-"""preprocess_vqa.py — CÔNG ĐOẠN PREPROCESSING VQA, tách nguyên trạng từ run7_qwen7b.py.
-
-Mọi hàm/hằng được trích VERBATIM (byte-identical, verify bằng AST) từ closure
-`run_preprocess_all` của run7_qwen7b.py — không sửa logic; chỉ bỏ phần train/eval
-và các import nặng (torch/transformers/peft) mà preprocessing không dùng.
-Phụ thuộc: cv2 + tqdm + stdlib.
-
-Pipeline: stats -> extract frames (chọn keyframe theo phase, vẽ bbox, crop local)
-          -> build vqa_{train,val}.json -> build caption_train.json
-
-Env:
-  AICC26_DATA_ROOT          root dataset (videos/ + annotations/), mặc định <project>/synwts_data/data
-  AICC26_WORK_ROOT_QWEN7B   root output (processed/...), mặc định /workspace/AICC/code/output_qwen7b
-  AICC26_PROJECT_ROOT       mặc định /workspace
-
-TRAIN: AICC26_DATA_ROOT=<synwts>/data python preprocess_vqa.py --workers 8
-TEST:  test package mount như split "val" (lịch sử: prepare_test_root.py):
-       AICC26_DATA_ROOT=<test_root>/data AICC26_WORK_ROOT_QWEN7B=<work> python preprocess_vqa.py
-       -> <work>/processed/vqa_val.json = metadata VQA test (= data_meta/vqa_test.json)
-"""
 import json
 import os
 import re
@@ -261,13 +241,6 @@ def discover_vqa_scenarios(split: str) -> list[ScenarioRef]:
     return [refs[k] for k in sorted(refs)]
 
 def discover_caption_scenarios(split: str) -> list[ScenarioRef]:
-    """All scenarios that have caption GT — including the normal_trimmed
-    scenarios that have NO VQA file (62 in train as of the 2026-05-21 update).
-
-    Mirrors discover_vqa_scenarios but globs ``*_caption.json`` under the
-    caption tree so caption-only (BDD-domain) scenarios are not dropped from
-    frame extraction or the caption dataset.
-    """
     root = CAPTION_DIR / split
     refs: dict[str, ScenarioRef] = {}
     if not root.exists():
@@ -281,10 +254,6 @@ def discover_caption_scenarios(split: str) -> list[ScenarioRef]:
     return [refs[k] for k in sorted(refs)]
 
 def discover_all_scenarios(split: str) -> list[ScenarioRef]:
-    """Union of VQA + caption scenarios, deduplicated by rel_path. Used for
-    frame extraction so every scenario with ANY GT (VQA or caption) gets
-    frames — otherwise caption-only scenarios have no frames and their
-    caption samples are silently dropped."""
     refs: dict[str, ScenarioRef] = {}
     for ref in discover_vqa_scenarios(split):
         refs[ref.rel_path.as_posix()] = ref
@@ -299,17 +268,6 @@ def _read_vqa_entries(path: Path) -> list[dict]:
     return data if isinstance(data, list) else []
 
 def _read_scene_entries(ref: ScenarioRef, view: str) -> list[dict]:
-    """Scene metadata (video list + event_phase) for a (scenario, view),
-    reading the VQA JSON when present and falling back to the CAPTION JSON.
-
-    The SynWTS 2026-05-21 update added normal_trimmed scenarios that have
-    caption GT but NO VQA file. The frame-extraction + video-resolver path
-    originally read only VQA JSONs, so those 62 caption-only scenarios were
-    silently dropped (no frames, no caption samples). Both JSON kinds expose
-    the same ``overhead_videos`` / ``vehicle_view`` + ``event_phase`` fields;
-    the only difference is the VQA file is a LIST of entries while the caption
-    file is a single DICT — we normalise both to a list of entry-dicts here.
-    """
     vqa = _read_vqa_entries(_vqa_json_path(ref, view))
     if vqa:
         return vqa
@@ -402,9 +360,6 @@ def best_overhead_video(ref: ScenarioRef) -> str | None:
 def _build_jobs(splits: tuple[str, ...] = ("train", "val")) -> list[_Job]:
     jobs: list[_Job] = []
     for split in splits:
-        # discover_all_scenarios = VQA ∪ caption, so caption-only normal_trimmed
-        # scenarios also get frames extracted (resolvers fall back to caption
-        # JSON via _read_scene_entries).
         for ref in discover_all_scenarios(split):
             best_ov = best_overhead_video(ref)
             if best_ov is not None:
@@ -441,15 +396,12 @@ _ENV_KW = frozenset({
 })
 
 def classify_question(question: str) -> str:
-    """Map question text to a routing category."""
     q = question.lower()
     words = set(re.findall(r'\b\w+\b', q))
 
     has_vehicle_focus = bool(words & {"vehicle", "car", "bus", "truck", "driver"})
     has_ped_focus = bool(words & {"pedestrian", "person", "walker", "people"})
 
-    # Gaze/awareness — hard questions, need cross-view
-    # "visual status" and "field of view" are gaze-class but keywords have spaces/compound forms
     if (
         words & _GAZE_KW
         or "line of sight" in q
@@ -458,25 +410,20 @@ def classify_question(question: str) -> str:
     ):
         return "gaze"
 
-    # Appearance — need clearest ped frame
     if words & _APPEARANCE_KW:
         return "appearance"
 
-    # Vehicle-focused questions
     if has_vehicle_focus and not has_ped_focus:
         if words & {"position", "distance", "where", "location", "far", "near", "close"}:
             return "vehicle_position"
         return "vehicle_action"
 
-    # Position/distance — "orientation" describes spatial relationship → position frame
     if words & _POSITION_KW or "orientation" in words:
         return "position"
 
-    # Environment
     if words & _ENV_KW:
         return "environment"
 
-    # Default: action/trajectory
     return "action"
 
 VQA_PROMPT_TEMPLATE = (
@@ -600,21 +547,18 @@ def _select_overhead_frame(
     boundary = end_frame if direction > 0 else start_frame
     scan = range(anchor_frame, boundary + (1 if direction > 0 else -1), 1 if direction > 0 else -1)
 
-    # Pass 1: find frame with both ped + veh bbox
     for frame_id in scan:
         ped_bb = ped_by_image.get(frame_id)
         veh_bb = veh_by_image.get(frame_id)
         if ped_bb is not None and veh_bb is not None:
             return _SelectedFrame(suffix, frame_id, ped_bb, veh_bb)
 
-    # Pass 2: find frame with at least one bbox
     for frame_id in scan:
         ped_bb = ped_by_image.get(frame_id)
         veh_bb = veh_by_image.get(frame_id)
         if ped_bb is not None or veh_bb is not None:
             return _SelectedFrame(suffix, frame_id, ped_bb, veh_bb)
 
-    # Fallback: use anchor frame with nearest available bboxes
     ped_bb = _nearest_bbox(ped_by_image, anchor_frame)
     veh_bb = _nearest_bbox(veh_by_image, anchor_frame)
     return _SelectedFrame(suffix, anchor_frame, ped_bb, veh_bb)
@@ -639,7 +583,6 @@ def _find_clearest_ped_frame(
     start_frame: int,
     end_frame: int,
 ) -> tuple[int, BBox] | None:
-    """Return (frame_id, bbox) for frame with largest ped bbox in [start, end]."""
     candidates = {
         fid: bb for fid, bb in ped_by_image.items()
         if start_frame <= fid <= end_frame
@@ -655,7 +598,6 @@ def _find_both_visible_frame(
     start_frame: int,
     end_frame: int,
 ) -> tuple[int, BBox, BBox] | None:
-    """Return (frame_id, ped_bbox, veh_bbox) for frame where both are visible."""
     ped_frames = {fid for fid in ped_by_image if start_frame <= fid <= end_frame}
     veh_frames = {fid for fid in veh_by_image if start_frame <= fid <= end_frame}
     common = ped_frames & veh_frames
@@ -681,7 +623,7 @@ def _write_frame_jpg(
     suffix: str,
     ped_bb: BBox | None,
     veh_bb: BBox | None,
-    local_crop: str = "union",  # "union" | "ped" | "none"
+    local_crop: str = "union",
 ) -> bool:
     cv_cap.set(cv2.CAP_PROP_POS_FRAMES, frame_id)
     ok, frame = cv_cap.read()
@@ -743,7 +685,6 @@ def _process_job(job: _Job) -> int:
     out_g = FRAMES_GLOBAL / job.split / job.ref.rel_path / job.view
     out_g.mkdir(parents=True, exist_ok=True)
     out_l: Path | None = None
-    # Both overhead AND vehicle_view get local crops (vehicle for cross-view gaze)
     out_l = FRAMES_LOCAL / job.split / job.ref.rel_path / job.view
     out_l.mkdir(parents=True, exist_ok=True)
 
@@ -767,7 +708,6 @@ def _process_job(job: _Job) -> int:
         if is_overhead:
             veh_by_image = _bbox_by_image(veh_records, phase_num)
 
-            # --- mid + end frames (trajectory) ---
             trajectory = _merge_close_mid_end(
                 _select_overhead_frame(
                     suffix="mid", anchor_frame=mid_anchor,
@@ -787,7 +727,6 @@ def _process_job(job: _Job) -> int:
                                     sel.suffix, sel.ped_bb, sel.veh_bb, local_crop="union"):
                     written += 1
 
-            # --- clearest ped frame: ped-only local crop ---
             clearest = _find_clearest_ped_frame(ped_by_image, start_frame, end_anchor)
             if clearest is not None:
                 fid, ped_bb = clearest
@@ -796,7 +735,6 @@ def _process_job(job: _Job) -> int:
                                     "clearest", ped_bb, veh_bb, local_crop="ped"):
                     written += 1
 
-            # --- both_visible frame: union local crop ---
             both = _find_both_visible_frame(ped_by_image, veh_by_image, start_frame, end_anchor)
             if both is not None:
                 fid, ped_bb, veh_bb = both
@@ -805,7 +743,6 @@ def _process_job(job: _Job) -> int:
                     written += 1
 
         else:
-            # Vehicle view: mid + end + clearest (for cross-view gaze questions)
             mid_ped = _nearest_bbox(ped_by_image, mid_anchor)
             end_ped = _nearest_bbox(ped_by_image, end_anchor)
             trajectory = _merge_close_mid_end(
@@ -816,9 +753,7 @@ def _process_job(job: _Job) -> int:
                 if _write_frame_jpg(cv_cap, sel.frame_id, out_g, out_l, base, phase_num,
                                     sel.suffix, sel.ped_bb, None, local_crop="none"):
                     written += 1
-                # Also save global to out_g (already done above via out_l=None skipped)
 
-            # Clearest ped from dashcam — ped local crop for cross-view
             clearest = _find_clearest_ped_frame(ped_by_image, start_frame, end_anchor)
             if clearest is not None:
                 fid, ped_bb = clearest
@@ -858,7 +793,6 @@ def _collect_existing(
     phase_num: str,
     suffixes: list[str],
 ) -> list[Path]:
-    """Return existing paths for the given suffixes."""
     if base_video is None:
         return []
     paths = []
@@ -874,7 +808,6 @@ def _trajectory_paths(
     base_video: str | None,
     phase_num: str,
 ) -> list[Path]:
-    """Return mid+end global paths, falling back to ens if merged."""
     if base_video is None:
         return []
     paths = _collect_existing(FRAMES_GLOBAL, ref, view, base_video, phase_num, ["mid", "end"])
@@ -888,11 +821,6 @@ def _trajectory_paths_local(
     base_video: str | None,
     phase_num: str,
 ) -> list[Path]:
-    """Return mid+end LOCAL (union crop) paths, falling back to ens if merged.
-
-    Only overhead_view writes local mid/end (local_crop="union"); vehicle_view
-    uses local_crop="none" so this returns [] for vehicle and is a no-op there.
-    """
     if base_video is None:
         return []
     paths = _collect_existing(FRAMES_LOCAL, ref, view, base_video, phase_num, ["mid", "end"])
@@ -909,12 +837,10 @@ def _frame_paths_for_question(
     phase_num: str,
     q_type: str,
 ) -> tuple[Path, ...] | None:
-    """Select image paths based on question type and view."""
     paths: list[Path] = []
 
     if view == "overhead_view" and overhead_base:
         if q_type == "gaze":
-            # Ped-only local crop (upscale) + trajectory + dashcam cross-view
             paths += _collect_existing(FRAMES_LOCAL, ref, "overhead_view", overhead_base, phase_num, ["clearest"])
             paths += _trajectory_paths(ref, "overhead_view", overhead_base, phase_num)
             if vehicle_base:
@@ -926,7 +852,6 @@ def _frame_paths_for_question(
             paths += _collect_existing(FRAMES_LOCAL, ref, "overhead_view", overhead_base, phase_num, ["clearest"])
 
         elif q_type == "position":
-            # Both visible (spatial context) + clearest ped for detail
             paths += _collect_existing(FRAMES_GLOBAL, ref, "overhead_view", overhead_base, phase_num, ["both"])
             paths += _collect_existing(FRAMES_LOCAL, ref, "overhead_view", overhead_base, phase_num, ["both"])
             paths += _collect_existing(FRAMES_LOCAL, ref, "overhead_view", overhead_base, phase_num, ["clearest"])
@@ -942,13 +867,12 @@ def _frame_paths_for_question(
         elif q_type == "vehicle_action":
             paths += _trajectory_paths(ref, "overhead_view", overhead_base, phase_num)
 
-        else:  # action / default — ped trajectory: global full frame + zoomed union crop
+        else:
             paths += _trajectory_paths(ref, "overhead_view", overhead_base, phase_num)
             paths += _trajectory_paths_local(ref, "overhead_view", overhead_base, phase_num)
 
     elif view == "vehicle_view" and vehicle_base:
         if q_type == "gaze":
-            # Dashcam is great for gaze — clearest ped crop first
             paths += _collect_existing(FRAMES_GLOBAL, ref, "vehicle_view", vehicle_base, phase_num, ["clearest"])
             paths += _collect_existing(FRAMES_LOCAL, ref, "vehicle_view", vehicle_base, phase_num, ["clearest"])
             paths += _trajectory_paths(ref, "vehicle_view", vehicle_base, phase_num)
@@ -957,11 +881,9 @@ def _frame_paths_for_question(
             paths += _collect_existing(FRAMES_GLOBAL, ref, "vehicle_view", vehicle_base, phase_num, ["clearest"])
             paths += _collect_existing(FRAMES_LOCAL, ref, "vehicle_view", vehicle_base, phase_num, ["clearest"])
 
-        else:  # action, position, vehicle_*, environment, default
+        else:
             paths += _trajectory_paths(ref, "vehicle_view", vehicle_base, phase_num)
 
-    # Fallback: any available frame for this view.
-    # Try suffixes in priority order matched to q_type context.
     if not paths:
         base = overhead_base if view == "overhead_view" else vehicle_base
         if q_type == "environment":
@@ -996,7 +918,6 @@ def _vqa_sample(
     if correct not in ("a", "b", "c", "d"):
         return None
     question = (conv.get("question") or "").strip()
-    # Answer = "c. full option text" for richer training supervision
     option_text = (conv.get(correct) or "").strip()
     answer = f"{correct}. {option_text}" if option_text else correct
 
@@ -1096,7 +1017,6 @@ def _env_extra_paths(
     base_video: str,
     q_type: str,
 ) -> list[Path]:
-    """Extra frames added on top of phase-2 mid/ens for environment questions."""
     v = "overhead_view"
     p = _ENV_PHASE_NUM
     if q_type == "appearance":
@@ -1121,7 +1041,6 @@ def _process_env_file(
     camera_id: str,
     json_path: Path,
 ) -> list[dict]:
-    # Base: global mid/ens of phase 2 — scene-level context for all env questions
     base_paths = _collect_existing(
         FRAMES_GLOBAL, ref, "overhead_view", base_video, _ENV_PHASE_NUM, ["mid", "ens"]
     )
@@ -1134,7 +1053,6 @@ def _process_env_file(
             qid = _question_id(conv, fallback_qid)
             question = (conv.get("question") or "").strip()
             q_type = classify_question(question)
-            # base scene frame + question-specific extra frames
             paths = tuple(base_paths + _env_extra_paths(ref, base_video, q_type))
             sample = _vqa_sample(
                 ref=ref,
@@ -1397,7 +1315,6 @@ def _frames_exist(splits: tuple[str, ...] = ("train", "val")) -> bool:
         split_dir = FRAMES_GLOBAL / split
         if not split_dir.exists() or not any(split_dir.rglob("*.jpg")):
             return False
-        # Check for new frame types from the improved pipeline
         has_new = any(
             any(split_dir.rglob(f"*_phase*_{suffix}.jpg"))
             for suffix in ("clearest", "both")

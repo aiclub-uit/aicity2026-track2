@@ -1,8 +1,4 @@
 #!/bin/bash
-# bundle_test_pipeline.sh — Deploy Sim2Real bundle lên test.
-# Composition "bundle-no-other" (val +0.05): spatial=ctx (giữ), other=base wsd2 (giữ),
-# TGT={direction,speed,attention,distance,action}=bundle. Update CHỈ TGT lên nền SUBMIT_Q35_CTX.
-# Caption = bản 30.17 (KHÔNG đụng). Output: SUBMIT_Q35_BUNDLE.
 set -o pipefail; CODE=/workspace/AICC/code; cd "$CODE"; PY=/venv/qwen35/bin/python
 if [ "${_BT:-}" != "1" ]; then : > bundle_test.log; export _BT=1
   nohup setsid bash "$0" </dev/null >> bundle_test.log 2>&1 & disown

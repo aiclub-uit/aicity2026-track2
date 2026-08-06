@@ -1,37 +1,26 @@
 #!/usr/bin/env python
-"""fact_stitch3.py — Fact-Stitch v3 "full-pillar": mở rộng oracle sang color/lower/brightness/
-inclination/surface/distance với 2 chế độ: CORRECTIVE (sửa giá trị sai) + ADDITIVE (chèn slot thiếu
-bằng câu template canonical mined từ GT). Chồng LÊN v2 (age/height/clothing-upper/weather).
-
-Gate: val per-slot (MBR-300) -> chỉ giữ slot có ΔS1 >= 0. CLI:
-  val [--slots s1,s2|all]     # per-metric before/after
-  test --base DIR --out DIR [--slots ...]
-"""
 from __future__ import annotations
 import argparse, json, re, collections, shutil, sys
 from pathlib import Path
 
 CODE = Path("/workspace/AICC/code")
 WORK = CODE / "output_qwen35"
-# Oracle test = đáp án FULL_v2. Hằng module để reproduce_all.py patch về bản trong gói
-# (submissions/base_full_v2_subtask2.json — byte-identical file deploy, md5 f6901835...).
 ORACLE_TEST = "/workspace/AICC/SUBMIT_Q35_FULL_v2/subtask2_vqa.json"
 sys.path.insert(0, str(CODE))
-from fact_stitch import build_oracle as build_oracle_v2, stitch as stitch_v2   # v2 slots
+from fact_stitch import build_oracle as build_oracle_v2, stitch as stitch_v2
 
 LOWER_NOUNS = r"slacks|trousers|pants|jeans|skirt|shorts"
 UPPER_NOUNS = r"t-?shirt|shirt|jacket|coat|hoodie|sweater|parka|blouse"
 COLORS = r"(?:navy blue|light blue|dark blue|navy|black|white|blue|beige|brown|gr[ae]y|green|red|purple|yellow|orange|pink|khaki|dark|light)"
 
-# slot: (question-pattern, canon(option_text)->value|None)
 V3_Q = {
     "color_upper": (r"colou?r of pedestrian'?s upper body", lambda t: t.lower().strip() or None),
     "color_lower": (r"colou?r of pedestrian'?s lower body", lambda t: t.lower().strip() or None),
     "lower_item":  (r"wearing on lower body", lambda t: t.lower().strip() or None),
-    "brightness":  (r"brightness level", lambda t: t.lower().strip() or None),          # bright|dim|dark
-    "inclination": (r"road inclination", lambda t: t.lower().strip() or None),          # level|downhill|...
-    "surface_cond": (r"road surface conditions", lambda t: t.lower().strip() or None),  # dry|wet|frozen
-    "surface_type": (r"surface type of the road", lambda t: t.lower().strip() or None), # asphalt|...
+    "brightness":  (r"brightness level", lambda t: t.lower().strip() or None),
+    "inclination": (r"road inclination", lambda t: t.lower().strip() or None),
+    "surface_cond": (r"road surface conditions", lambda t: t.lower().strip() or None),
+    "surface_type": (r"surface type of the road", lambda t: t.lower().strip() or None),
     "distance":    (r"relative distance of pedestrian from vehicle", lambda t: t.lower().strip() or None),
 }
 ALL_SLOTS = list(V3_Q)
@@ -62,7 +51,6 @@ def build_oracle_v3(vqa_samples_path, answers):
 
 
 def _set_color(text, noun_re, color):
-    """thay/chèn màu ngay trước item noun (corrective/insert)."""
     m = re.search(rf"\b((?:{COLORS})(?:\s+{COLORS})?\s+)?({noun_re})\b", text, re.I)
     if not m: return text, 0
     cur = (m.group(1) or "").strip().lower()
@@ -73,7 +61,6 @@ def _set_color(text, noun_re, color):
 
 
 def _replace_in_ctx(text, ctx_pat, val_pat, new):
-    """thay từ khớp val_pat trong CÂU có ctx_pat; trả (text, changed)."""
     out, changed = [], 0
     for sent in re.split(r"(?<=[.;])", text):
         if re.search(ctx_pat, sent, re.I):
@@ -99,7 +86,6 @@ def stitch_v3(text, o, target, slots):
             else:
                 text = text.rstrip() + f" The relative distance between the pedestrian and the vehicle is {o['distance']}."
                 n += 1
-    # env slots: cả 2 channel
     if "brightness" in slots and o.get("brightness"):
         if re.search(r"\bbrightness|\blighting\b", text, re.I):
             text, c = _replace_in_ctx(text, r"brightness|lighting", r"\b(bright|dim|dark)\b", o["brightness"]); n += c
@@ -136,7 +122,7 @@ def cmd_val(slots):
     gen = {sid: (meta[sid], p) for sid, p in preds.items() if sid in meta}
     fixed, nfix = {}, 0
     for sid, (s, p) in gen.items():
-        t, n1 = stitch_v2(p, o2.get(s["scenario"], {}), s["target"])          # v2 luôn bật (đã proven)
+        t, n1 = stitch_v2(p, o2.get(s["scenario"], {}), s["target"])
         t, n2 = stitch_v3(t, o3.get(s["scenario"], {}), s["target"], slots)
         fixed[sid] = (s, t); nfix += n1 + n2
     ob, oa = _score(gen), _score(fixed)

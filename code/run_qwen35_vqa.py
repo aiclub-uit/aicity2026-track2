@@ -1,35 +1,22 @@
 #!/usr/bin/env python
-"""run_qwen35_vqa.py — LoRA QLoRA fine-tune Qwen3.5-9B (native multimodal, DENSE) cho VQA MCQ.
-
-Chạy trong venv /venv/qwen35 (transformers main 5.13 + peft 0.15). Processor = Qwen3VLProcessor
-(xử lý ảnh chuẩn Qwen-VL). Tái dùng output_qwen7b/processed/vqa_{train,val}.json.
-Mục tiêu: eval per-qtype, đặc biệt position_veh (Qwen2.5 61% — nếu Qwen3.5 thắng -> route tiếp).
-
-CLI:
-  python run_qwen35_vqa.py inspect
-  python run_qwen35_vqa.py train [--limit N]
-  python run_qwen35_vqa.py eval  [--limit N]
-  python run_qwen35_vqa.py predict --samples X.json --out Y.json --qtypes a,b
-"""
 from __future__ import annotations
 import argparse, json, re, os
 from pathlib import Path
 
-MODEL_ID = os.environ.get("AICC26_QWEN35_MODEL", "Qwen/Qwen3.5-9B")  # 27B: AICC26_QWEN35_MODEL=Qwen/Qwen3.5-27B
+MODEL_ID = os.environ.get("AICC26_QWEN35_MODEL", "Qwen/Qwen3.5-9B")
 os.environ.setdefault("HF_HOME", "/workspace/hf_cache")
 WORK = Path("/workspace/AICC/code/output_qwen35")
 LORA_OUT = Path(os.environ.get("AICC26_QWEN35_ADAPTER", str(WORK / "vqa_lora")))
 DATA = Path(os.environ.get("AICC26_DATA_DIR", "/workspace/AICC/code/output_qwen7b/processed"))
 OPTION_LABELS = ["a", "b", "c", "d"]
-# LoRA: LLM attention (full-attn q/k/v/o + Gated-DeltaNet in_proj_qkv/out_proj) + FFN. Freeze vision.
 LORA_TARGETS = ["q_proj", "k_proj", "v_proj", "o_proj",
                 "in_proj_qkv", "out_proj", "gate_proj", "up_proj", "down_proj"]
-if os.environ.get("AICC26_LORA_REGEX"):  # backbone khác (vd Qwen3-VL): regex fullmatch, tránh dính vision blocks
+if os.environ.get("AICC26_LORA_REGEX"):
     LORA_TARGETS = os.environ["AICC26_LORA_REGEX"]
 NUM_IMAGES = int(os.environ.get("QWEN35_NUM_IMAGES", "3"))
 
 
-QUANT = os.environ.get("AICC26_QWEN35_QUANT", "8bit")  # 4bit | 8bit | bf16 (bf16=zero loss, fit 96GB)
+QUANT = os.environ.get("AICC26_QWEN35_QUANT", "8bit")
 
 
 def _quant_kw(for_train):
@@ -41,7 +28,7 @@ def _quant_kw(for_train):
     if QUANT == "8bit":
         return dict(dtype=torch.bfloat16, device_map=dm,
                     quantization_config=BitsAndBytesConfig(load_in_8bit=True))
-    return dict(dtype=torch.bfloat16, device_map=dm,  # 4bit
+    return dict(dtype=torch.bfloat16, device_map=dm,
                 quantization_config=BitsAndBytesConfig(
                     load_in_4bit=True, bnb_4bit_quant_type="nf4",
                     bnb_4bit_compute_dtype=torch.bfloat16, bnb_4bit_use_double_quant=True))
@@ -49,7 +36,7 @@ def _quant_kw(for_train):
 
 def _load(for_train=False):
     from transformers import AutoProcessor, AutoModelForImageTextToText
-    pkw = {}  # cap vision tokens (chống OOM khi NUM_IMAGES cao); default None -> giữ nguyên hành vi best@3
+    pkw = {}
     if os.environ.get("QWEN35_MAX_PIXELS"):
         pkw["max_pixels"] = int(os.environ["QWEN35_MAX_PIXELS"])
     if os.environ.get("QWEN35_MIN_PIXELS"):
@@ -73,7 +60,7 @@ def _qtype(q):
 
 def _imgs(sample):
     ims = [str(p) for p in sample["images"]]
-    if os.environ.get("QWEN35_IMG_ORDER") == "local_first":  # attribute-evidence: crop zoom trước
+    if os.environ.get("QWEN35_IMG_ORDER") == "local_first":
         l = [p for p in ims if "frames_local" in p]
         return (l + [p for p in ims if p not in l])[:NUM_IMAGES]
     if NUM_IMAGES >= len(ims):
@@ -124,7 +111,7 @@ class Collator:
             uc = [{"type": "image", "image": p} for p in ex["images"]] + [{"type": "text", "text": ex["q"]}]
             um = [{"role": "user", "content": uc}]
             fm = um + [{"role": "assistant", "content": [{"type": "text", "text": ex["ans"]}]}]
-            imgs, _ = process_vision_info(copy.deepcopy(um))  # TRƯỚC apply_chat_template (nó mutate)
+            imgs, _ = process_vision_info(copy.deepcopy(um))
             ftext = self.proc.apply_chat_template(fm, tokenize=False, add_generation_prompt=False, enable_thinking=False)
             ptext = self.proc.apply_chat_template(um, tokenize=False, add_generation_prompt=True, enable_thinking=False)
             full = self.proc(text=[ftext], images=imgs, return_tensors="pt", padding=True)
@@ -133,7 +120,6 @@ class Collator:
             labels[:, :nprompt] = -100
             full["labels"] = labels
             feats.append(full)
-        # batch=1 -> tra thang
         return {k: (v if not hasattr(v, "shape") else v) for k, v in feats[0].items()}
 
 
@@ -157,7 +143,7 @@ def cmd_train(limit):
     proc, model = _load(for_train=True)
     if QUANT in ("4bit", "8bit"):
         model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
-    else:  # bf16: bật checkpointing + input_require_grads thủ công
+    else:
         model.config.use_cache = False
         model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
         model.enable_input_require_grads()
@@ -184,7 +170,7 @@ def _predict_letters(proc, model, samples):
     LID = _letter_ids(proc)
     BATCH = int(os.environ.get("QWEN35_BATCH", "1"))
     if BATCH > 1:
-        proc.tokenizer.padding_side = "left"  # last-token logit right-aligned cho batch
+        proc.tokenizer.padding_side = "left"
     res = {}
     for i in tqdm(range(0, len(samples), BATCH), desc="q35-pred"):
         chunk = samples[i:i + BATCH]
@@ -196,13 +182,13 @@ def _predict_letters(proc, model, samples):
             all_imgs.extend(ims)
         inp = proc(text=texts, images=all_imgs, return_tensors="pt", padding=True).to(model.device)
         with torch.inference_mode():
-            lg = model(**inp, return_dict=True).logits[:, -1, :]  # [B, vocab], left-pad -> last = real
+            lg = model(**inp, return_dict=True).logits[:, -1, :]
         for j, s in enumerate(chunk):
             row = lg[j]
             ol = torch.tensor([row[LID[L]] for L in OPTION_LABELS]).float()
             pred = OPTION_LABELS[int(ol.argmax())]
             res[s.get("id", id(s))] = pred
-            if os.environ.get("QWEN35_SAVE_PROBS"):  # WSD: lưu phân phối 4 lựa chọn
+            if os.environ.get("QWEN35_SAVE_PROBS"):
                 _PROBS[s.get("id", id(s))] = [round(float(x), 5) for x in torch.softmax(ol, 0)]
     if os.environ.get("QWEN35_SAVE_PROBS"):
         json.dump(_PROBS, open(os.environ["QWEN35_SAVE_PROBS"], "w"))

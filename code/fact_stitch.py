@@ -1,14 +1,4 @@
 #!/usr/bin/env python
-"""fact_stitch.py — Fact-Stitch v2: VQA-oracle (in-format, 86.8-96.3%) -> phẫu thuật attribute vào caption.
-
-Oracle = đáp án VQA của CHÍNH pipeline (val: preds vừa chạy; test: subtask2 ĐÃ CÓ trong submission).
-Attribute dùng: age 86.8% / clothing-upper 92.5% / weather 90.2% / height 96.3% (đều > free-form 69%).
-Stitch = thay GIÁ TRỊ trong caption (prose giữ nguyên -> BLEU/ROUGE bảo toàn, CIDEr/METEOR nhận fact đúng).
-
-CLI:
-  val    # gate: stitch MBR-300 val preds bằng VAL VQA PREDS -> per-metric before/after + attr-accuracy
-  test --base /workspace/AICC/SUBMIT_Q35_FULL_v2 --out /workspace/AICC/SUBMIT_Q35_STITCH
-"""
 from __future__ import annotations
 import argparse, json, re, collections, shutil, sys
 from pathlib import Path
@@ -51,7 +41,6 @@ def _canon(qtype, opt_text):
 
 
 def build_oracle(vqa_samples_path, answers):
-    """answers: {id: letter}. -> {scenario: {age:.., height:.., weather:.., clothing:..}} (majority, tie->skip)."""
     samples = json.load(open(vqa_samples_path))
     votes = collections.defaultdict(lambda: collections.defaultdict(collections.Counter))
     for s in samples:
@@ -74,7 +63,6 @@ def build_oracle(vqa_samples_path, answers):
 
 
 def stitch(text, o, target):
-    """thay giá trị attribute theo oracle o; trả (text, n_changes)."""
     n = 0
     if target == "pedestrian":
         if o.get("age"):
@@ -86,7 +74,7 @@ def stitch(text, o, target):
         if o.get("clothing"):
             new = re.sub(rf"\b({CLOTH_NOUNS})\b", o["clothing"], text, count=1, flags=re.I)
             if new != text: n += 1; text = new
-    if o.get("weather"):  # cả 2 channel
+    if o.get("weather"):
         out_sents = []
         changed = False
         for sent in re.split(r"(?<=[.;])", text):
@@ -100,10 +88,10 @@ def stitch(text, o, target):
 
 def cmd_val():
     from harmonize_attrs import _score
-    answers = json.load(open(WORK / "vqa_val_preds_full.json"))          # PREDICTIONS (không phải GT)
+    answers = json.load(open(WORK / "vqa_val_preds_full.json"))
     oracle = build_oracle(CODE / "output_qwen7b/processed/vqa_val.json", answers)
     print(f"[stitch] oracle val: {len(oracle)} scenarios; ví dụ:", dict(list(oracle.items())[:1]))
-    preds = json.load(open(WORK / "caption_val_preds.json"))             # MBR-300
+    preds = json.load(open(WORK / "caption_val_preds.json"))
     meta = {s["id"]: s for s in json.load(open(CODE / "output_qwen7b_caption/processed/caption_val.json"))}
     gen = {sid: (meta[sid], p) for sid, p in preds.items() if sid in meta}
     fixed, nfix = {}, 0
@@ -111,7 +99,6 @@ def cmd_val():
         t, n = stitch(p, oracle.get(s["scenario"], {}), s["target"])
         fixed[sid] = (s, t); nfix += n
     print(f"[stitch] val: {nfix} thay đổi trên {len(gen)} captions")
-    # attr-accuracy gate (age) — so vs GT labels
     labels = json.load(open(WORK / "fact_labels_val.json"))
     for tag, g in (("BEFORE", gen), ("AFTER ", fixed)):
         ok = tot = 0

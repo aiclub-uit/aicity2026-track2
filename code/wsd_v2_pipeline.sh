@@ -1,7 +1,4 @@
 #!/bin/bash
-# WSD-v2: Viterbi cho 5 qtype mới (direction/speed/attention/distance/action).
-# Chạy SAU D4. Val predict probs (full) -> gate per-type -> chỉ decode test các type Δ>=+1.0
-# -> SUBMIT_Q35_WSD2 = caption V4 + VQA (WSD spatial + WSD2 types mới).
 set -o pipefail; CODE=/workspace/AICC/code; cd "$CODE"; PY=/venv/qwen35/bin/python
 if [ "${_W2:-}" != "1" ]; then : > wsd_v2.log; export _W2=1
   nohup setsid bash "$0" </dev/null >> wsd_v2.log 2>&1 & disown
@@ -50,7 +47,6 @@ done
 [ $ok -eq 1 ] || { log "❌ test predict fail"; exit 1; }
 
 log "==== [4] decode types PASS trên nền WSD -> SUBMIT_Q35_WSD2 ===="
-# GUARD: đừng ghi đè bản đã nộp điểm cao (WSD2 = VQA 84.5717). Nếu đã có -> ghi vào dir mới có timestamp.
 DEST=/workspace/AICC/SUBMIT_Q35_WSD2
 if [ -s "$DEST/subtask2_vqa.json" ]; then
   DEST=/workspace/AICC/SUBMIT_Q35_WSD2_rerun_$(date +%Y%m%d_%H%M%S)

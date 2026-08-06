@@ -1,22 +1,4 @@
 #!/usr/bin/env python
-"""preprocess_caption.py — CÔNG ĐOẠN PREPROCESSING CAPTION, tách nguyên trạng từ run_caption_qwen7b.py.
-
-Mọi hàm/hằng được trích VERBATIM (byte-identical, verify bằng AST) từ closure
-`run_preprocess_all` của run_caption_qwen7b.py — không sửa logic; chỉ bỏ phần
-train/DPO/eval và các import nặng. Phụ thuộc: cv2 + tqdm + stdlib.
-
-LƯU Ý: đây là fork ĐỘC LẬP với preprocess_vqa.py — hai bản khác nhau thật ở
-pad_bbox (per-axis vs isotropic) và tầng discovery; KHÔNG gộp chung để giữ
-byte-compatible với dữ liệu đã dùng train bản nộp.
-
-Pipeline: extract frames -> build caption_{train,val}.json -> build vqa_{train,val}.json
-(output vqa ở đây chỉ phục vụ testbed caption; bản VQA chính thức dùng preprocess_vqa.py)
-
-Env:
-  AICC26_DATA_ROOT              root dataset, mặc định probe HF cache rồi <project>/AICC/synwts/data
-  AICC26_WORK_ROOT_QWEN7B_CAP   root output, mặc định <project>/output_qwen7b_caption
-  AICC26_PED_CROP=1             thêm frames_local_ped + caption_{split}_pedcrop.json
-"""
 import json
 import os
 import re
@@ -30,16 +12,12 @@ from tqdm import tqdm
 
 PROJECT_ROOT = Path(os.environ.get("AICC26_PROJECT_ROOT", "/workspace"))
 
-_SCRIPT_DIR = Path(__file__).resolve().parent  # /workspace/AICC/code (when shipped in repo)
+_SCRIPT_DIR = Path(__file__).resolve().parent
 
 def _resolve_data_root() -> Path:
-    """Locate SynWTS data root. Env override wins; otherwise probe known layouts."""
     env = os.environ.get("AICC26_DATA_ROOT")
     if env:
         return Path(env)
-    # The dataset can either live in the HF hub cache (snapshot dir name is a
-    # content hash that rotates on every re-download) or be checked out next to
-    # the repo under .../AICC/synwts/data. Try both.
     snapshots_dir = (
         PROJECT_ROOT / ".cache" / "huggingface" / "hub"
         / "datasets--mlcglab--synwts" / "snapshots"
@@ -52,14 +30,14 @@ def _resolve_data_root() -> Path:
         if snapshots:
             return snapshots[-1] / "data"
     for candidate in (
-        _SCRIPT_DIR.parent / "synwts" / "data",   # /workspace/AICC/synwts/data
+        _SCRIPT_DIR.parent / "synwts" / "data",
         PROJECT_ROOT / "AICC" / "synwts" / "data",
         PROJECT_ROOT / "synwts" / "data",
         PROJECT_ROOT / "data_synwts" / "data",
     ):
         if candidate.is_dir():
             return candidate
-    return snapshots_dir / "data"  # last-resort placeholder for error messages
+    return snapshots_dir / "data"
 
 DATA_ROOT = _resolve_data_root()
 
@@ -83,7 +61,7 @@ FRAMES_GLOBAL = PROC_ROOT / "frames_global"
 
 FRAMES_LOCAL = PROC_ROOT / "frames_local"
 
-FRAMES_LOCAL_PED = PROC_ROOT / "frames_local_ped"  # tight ped-only crop (AICC26_PED_CROP screen)
+FRAMES_LOCAL_PED = PROC_ROOT / "frames_local_ped"
 
 PED_CROP = os.environ.get("AICC26_PED_CROP", "0") == "1"
 
@@ -108,7 +86,6 @@ PHASE_STR_TO_NUM = {
 PHASE_NUM_TO_STR = {v: k for k, v in PHASE_STR_TO_NUM.items()}
 
 def to_phase_num(label: Any) -> str:
-    """Normalise a phase label (string name or digit) to '0'..'4'."""
     s = str(label).strip().lower()
     if s in PHASE_STR_TO_NUM:
         return PHASE_STR_TO_NUM[s]
@@ -118,9 +95,9 @@ def to_phase_num(label: Any) -> str:
 
 @dataclass(frozen=True)
 class FrameConfig:
-    local_pad_ratio: float = 0.25     # padding around union(ped, veh) for local crop
-    local_pad_ratio_ped: float = 0.6  # padding around ped-only bbox (tight ped crop, AICC26_PED_CROP)
-    center_crop_ratio: float = 0.6    # fallback center crop ratio when no bbox
+    local_pad_ratio: float = 0.25
+    local_pad_ratio_ped: float = 0.6
+    center_crop_ratio: float = 0.6
     line_thickness: int = 3
     jpeg_quality: int = 92
     global_max_side: int = 1280
@@ -146,10 +123,6 @@ def write_json(path: str | Path, payload: Any, indent: int = 2) -> None:
 def list_scenarios(split_dir: Path) -> list[str]:
     if not split_dir.exists():
         return []
-    # SynWTS 2026-05-21 added a ``normal_trimmed/`` group (BDD-like normal
-    # driving). Its sub-scenarios are flattened to the split top level via
-    # symlinks (see the data-prep flatten step), so SKIP the container dir
-    # itself — otherwise it's treated as a bogus scenario with no per-view JSON.
     return sorted(
         d.name for d in split_dir.iterdir()
         if d.is_dir() and not d.name.startswith(".")
@@ -157,9 +130,6 @@ def list_scenarios(split_dir: Path) -> list[str]:
     )
 
 def camera_id_from_video(scenario: str, video_name: str) -> str:
-    """20230707_12_SN17_T1_192.168.0.11_1.mp4 -> 192.168.0.11_1
-    20230707_12_SN17_T1_vehicle_view.mp4   -> vehicle_view
-    """
     base = video_name.replace(".mp4", "")
     prefix = scenario + "_"
     return base[len(prefix):] if base.startswith(prefix) else base
@@ -209,7 +179,6 @@ def _bbox_by_image(records: Iterable[dict], phase_num: str) -> dict[int, BBox]:
     return by_image
 
 def _nearest_bbox(by_image: dict[int, BBox], target_frame_id: int) -> BBox | None:
-    """Return the bbox whose image_id is closest to ``target_frame_id``."""
     if not by_image:
         return None
     nearest_id = min(by_image, key=lambda k: abs(k - target_frame_id))
@@ -297,8 +266,8 @@ class _SelectedFrame:
 class _Job:
     split: str
     scenario: str
-    view: str           # "overhead_view" | "vehicle_view"
-    video_name: str     # e.g., "20230707_12_SN17_T1_192.168.0.11_1.mp4"
+    view: str
+    video_name: str
 
     @property
     def camera_id(self) -> str:
@@ -371,7 +340,6 @@ def _select_overhead_frame(
     ped_by_image: dict[int, BBox],
     veh_by_image: dict[int, BBox],
 ) -> _SelectedFrame:
-    """Pick an overhead frame within one phase, preferring ped+veh bboxes."""
     anchor_frame = _clip_frame_id(anchor_frame, start_frame, end_frame)
     boundary = end_frame if direction > 0 else start_frame
     scan = _scan_phase_frames(anchor_frame, boundary, 1 if direction > 0 else -1)
@@ -414,7 +382,6 @@ def _clear_phase_outputs(out_g: Path, out_l: Path | None, base: str, label: str)
             path.unlink()
 
 def _overhead_videos_for(scenario: str, split: str) -> list[str]:
-    """All overhead videos that physically exist + have ped+veh bbox JSONs."""
     cap_path = CAPTION_DIR / split / scenario / "overhead_view" / f"{scenario}_caption.json"
     if not cap_path.exists():
         return []
@@ -431,10 +398,6 @@ def _overhead_videos_for(scenario: str, split: str) -> list[str]:
     return keep
 
 def _score_overhead_video(scenario: str, split: str, video_name: str) -> float:
-    """Sum of (area_ped + area_veh) at middle frame of every phase for this camera.
-
-    Used to pick the best overhead camera per scenario (largest bbox coverage).
-    """
     base = video_name.replace(".mp4", "")
     vid_path = VIDEOS_DIR / split / scenario / "overhead_view" / video_name
     cap_path = CAPTION_DIR / split / scenario / "overhead_view" / f"{scenario}_caption.json"
@@ -472,7 +435,6 @@ def _score_overhead_video(scenario: str, split: str, video_name: str) -> float:
 
 @lru_cache(maxsize=4096)
 def _best_overhead_video(scenario: str, split: str) -> str | None:
-    """Pick the overhead camera with largest total bbox area across 5 phases."""
     candidates = _overhead_videos_for(scenario, split)
     if not candidates:
         return None
@@ -481,7 +443,6 @@ def _best_overhead_video(scenario: str, split: str) -> str | None:
     return scored[0][0]
 
 def _vehicle_video_for(scenario: str, split: str) -> str | None:
-    """Returns the vehicle_view video name if all inputs exist, else None."""
     v = f"{scenario}_vehicle_view.mp4"
     base = v.replace(".mp4", "")
     cap_path = CAPTION_DIR / split / scenario / "vehicle_view" / f"{scenario}_caption.json"
@@ -494,7 +455,6 @@ def _vehicle_video_for(scenario: str, split: str) -> str | None:
     return v
 
 def _build_jobs(splits: tuple[str, ...] = ("train", "val")) -> list[_Job]:
-    """One job per scenario: best overhead camera (by bbox area) + vehicle_view."""
     jobs: list[_Job] = []
     for split in splits:
         for scenario in list_scenarios(CAPTION_DIR / split):
@@ -510,13 +470,6 @@ def _caption_path_for(job: _Job) -> Path:
     return CAPTION_DIR / job.split / job.scenario / job.view / f"{job.scenario}_caption.json"
 
 def _process_job(job: _Job) -> int:
-    """Extract selected phase images.
-
-    Overhead: mid scans forward and end scans backward within the phase, first
-              looking for ped+veh bboxes, then for at least one bbox. If neither
-              direction finds a bbox, it falls back to the phase start frame.
-    Vehicle:  uses mid and end frames directly, drawing pedestrian bbox only.
-    """
     is_overhead = job.view == "overhead_view"
     vid_path = VIDEOS_DIR / job.split / job.scenario / job.view / job.video_name
     cap_path = _caption_path_for(job)
@@ -625,14 +578,13 @@ def _process_job(job: _Job) -> int:
                     local_img, [cv2.IMWRITE_JPEG_QUALITY, FRAME_CFG.jpeg_quality],
                 )
                 if out_l_ped is not None:
-                    # tight ped-only crop (ped_bb pad 0.6) upscaled -> ped chiếm phần lớn khung
                     if selected.ped_bb is not None:
                         px0, py0, px1, py1 = pad_bbox(selected.ped_bb, FRAME_CFG.local_pad_ratio_ped, w, h)
                         ped_img = drawn[py0:py1, px0:px1]
                         if ped_img.shape[0] == 0 or ped_img.shape[1] == 0:
                             ped_img = local_img
                     else:
-                        ped_img = local_img  # no ped bbox -> fallback union crop
+                        ped_img = local_img
                     ped_img = _resize_keep_aspect(ped_img, FRAME_CFG.local_max_side)
                     cv2.imwrite(
                         str(out_l_ped / f"{base}_phase{label}_{selected.suffix}.jpg"),
@@ -670,11 +622,6 @@ def _frame_paths(
     split: str, scenario: str, view: str, base_video: str, phase_label: str,
     local_root: Path = FRAMES_LOCAL,
 ) -> tuple[Path, ...] | None:
-    """Returns selected global/local frames for a phase in temporal order.
-
-    local_root selects which local-crop set to use (FRAMES_LOCAL=union, or
-    FRAMES_LOCAL_PED=tight ped crop for the pedestrian channel).
-    """
     paths: list[Path] = []
     for suffix in FRAME_SUFFIX_ORDER:
         g = _phase_image_path(FRAMES_GLOBAL, split, scenario, view, base_video, phase_label, suffix)
@@ -727,7 +674,6 @@ def _caption_samples_from_json(
     *, split: str, scenario: str, view: str, base_video: str, camera_id: str,
     cap_path: Path,
 ) -> list[dict]:
-    """Yield caption samples for one (scenario, view, camera) caption JSON."""
     if not cap_path.exists():
         return []
     samples: list[dict] = []
@@ -737,7 +683,6 @@ def _caption_samples_from_json(
         paths = _frame_paths(split, scenario, view, base_video, label)
         if paths is None:
             continue
-        # ped channel uses tight ped-crop local set khi AICC26_PED_CROP (fallback union nếu thiếu)
         ped_paths = paths
         if PED_CROP and view == "overhead_view":
             pp = _frame_paths(split, scenario, view, base_video, label, local_root=FRAMES_LOCAL_PED)
@@ -940,7 +885,6 @@ def run_build_vqa(splits: tuple[str, ...] = ("train", "val")) -> None:
         print(f"[vqa] {split}: {len(samples)} samples -> {out}")
 
 def _frames_exist(splits: tuple[str, ...] = ("train", "val")) -> bool:
-    """True iff the selected-frame format exists under FRAMES_GLOBAL."""
     for split in splits:
         split_dir = FRAMES_GLOBAL / split
         if not split_dir.exists() or not any(split_dir.rglob("*.jpg")):
@@ -969,7 +913,6 @@ def _dataset_has_selected_frame_paths(path: Path) -> bool:
     return False
 
 def run_preprocess_all(num_workers: int = 4, *, force: bool = False) -> None:
-    """Frame extraction + dataset build. Skips steps whose outputs already exist."""
     ensure_dirs()
 
     if force or not _frames_exist():

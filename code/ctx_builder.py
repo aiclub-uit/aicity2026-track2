@@ -1,19 +1,4 @@
 #!/usr/bin/env python
-"""ctx_builder.py — Build data VQA augmented: [Temporal context] + [Scene evidence bbox] vào prompt.
-
-Thiết kế chống lệch train/test (bài học mirror + coverage đo được):
-- bbox: train coverage 99.4% nhưng TEST chỉ 82.6% phase-level -> DROPOUT 30% khi train
-  ("Bounding boxes: unavailable." thành in-distribution). Chuẩn hóa theo size frame thật (PIL).
-- context: đáp án phase t-1 cùng chuỗi (scenario, qtype, qnorm). Train = GT với NOISE 25%
-  (thay bằng option sai ngẫu nhiên — xấp xỉ scheduled sampling, chống exposure bias).
-  Val/test = prediction đã deploy (2-pass). Dropout ctx 15% để ablation ctx-off in-distribution.
-- Chỉ 8 qtype temporal (wsd.QTYPES) có ctx; bbox cho MỌI câu.
-- Seed cố định 42 -> rebuild tái lập.
-
-CLI:
-  build --samples IN.json --out OUT.json --split train|val|test
-        [--ctx-answers PRED.json] [--mode both|ctx|bbox|none] [--train-noise]
-"""
 from __future__ import annotations
 import argparse, json, re, random, collections, statistics, sys
 from pathlib import Path
@@ -33,7 +18,6 @@ P_BBOX_DROP, P_CTX_DROP, P_CTX_NOISE = 0.30, 0.15, 0.25
 
 
 def _median_boxes(path):
-    """file bbox -> {phase: (x,y,w,h) median}."""
     try:
         j = json.load(open(path))
     except Exception:
@@ -61,7 +45,6 @@ class BBoxIndex:
                 f = base / s["scenario"] / s["view"] / f"{s['base_video']}_bbox.json"
                 if f.exists():
                     return f
-                # fallback: glob theo base_video (test layout có thể khác)
             g = list(root.glob(f"{kind}/**/{s['base_video']}_bbox.json"))
             if g:
                 return g[0]
@@ -70,7 +53,6 @@ class BBoxIndex:
     VIDEO_ROOTS = [AICC / "synwts/data/videos", AICC / "test_root/data/videos"]
 
     def _frame_size(self, s):
-        """Resolution VIDEO GỐC (không gian tọa độ bbox) — frame jpg đã bị resize nên KHÔNG dùng PIL."""
         bv = s["base_video"]
         if bv not in self.size_cache:
             wh = None
@@ -91,7 +73,6 @@ class BBoxIndex:
         return self.size_cache[bv]
 
     def get(self, s):
-        """-> (ped_str|None, veh_str|None) normalized (x,y,w,h) 2 chữ số."""
         W, H = self._frame_size(s)
         out = []
         for kind in ("pedestrian", "vehicle"):
@@ -116,7 +97,6 @@ PSTATE_LABEL = {"orientation": "pedestrian orientation", "position_ped": "pedest
 
 
 def _pstate_map(samples):
-    """(scenario, phase) -> {qtype: sample} (1 sample đại diện/qtype)."""
     ps = collections.defaultdict(dict)
     for s in samples:
         t = _qt(s["question"])
@@ -126,7 +106,6 @@ def _pstate_map(samples):
 
 
 def _prev_map(samples):
-    """id -> sample phase t-1 cùng chuỗi (scenario, qtype, qnorm)."""
     ch = collections.defaultdict(dict)
     for s in samples:
         t = _qt(s["question"])
@@ -148,7 +127,6 @@ def _prev_map(samples):
 
 
 def _ans_text(ps, ans_map, rng, train_noise):
-    """sample -> option text đáp án (GT+noise khi train, prediction khi val/test). None nếu drop."""
     if train_noise:
         if rng.random() < P_CTX_DROP:
             return None
@@ -174,7 +152,6 @@ def build(samples_path, out_path, split, ctx_answers, mode, train_noise, phase_s
     n_bbox = n_ctx = n_drop_b = n_drop_c = n_noise = n_ps = 0
     for s in samples:
         blocks = []
-        # --- phase-state (đáp án các câu KHÁC cùng phase — per-sample evidence) ---
         if phase_state:
             t0 = _qt(s["question"])
             if t0:
@@ -186,7 +163,6 @@ def build(samples_path, out_path, split, ctx_answers, mode, train_noise, phase_s
                 if parts:
                     blocks.append("[Phase state] " + "; ".join(parts) + ".")
                     n_ps += 1
-        # --- bbox ---
         if mode in ("both", "bbox"):
             if train_noise and rng.random() < P_BBOX_DROP:
                 blocks.append("[Scene evidence] Bounding boxes: unavailable."); n_drop_b += 1
@@ -198,7 +174,6 @@ def build(samples_path, out_path, split, ctx_answers, mode, train_noise, phase_s
                     n_bbox += 1
                 else:
                     blocks.append("[Scene evidence] Bounding boxes: unavailable.")
-        # --- temporal context ---
         if mode in ("both", "ctx"):
             ps = prev.get(s["id"])
             txt = None
@@ -208,7 +183,7 @@ def build(samples_path, out_path, split, ctx_answers, mode, train_noise, phase_s
                         n_drop_c += 1
                     else:
                         L = (ps["conversations"][1]["value"].strip()[:1] or "a").lower()
-                        if rng.random() < P_CTX_NOISE:  # scheduled-sampling xấp xỉ
+                        if rng.random() < P_CTX_NOISE:
                             L = rng.choice([x for x, _ in _opt_items(ps) if x != L] or [L]); n_noise += 1
                         d = dict(_opt_items(ps))
                         txt = d.get(L)

@@ -1,5 +1,4 @@
 #!/bin/bash
-# Qwen3.5-9B: full VQA train -> eval per-qtype (target position_veh). Venv qwen35.
 set -o pipefail; CODE=/workspace/AICC/code; cd "$CODE"; PY=/venv/qwen35/bin/python
 if [ "${_Q35:-}" != "1" ]; then : > run_qwen35_auto.log; export _Q35=1
   nohup setsid bash "$0" "$@" </dev/null >> run_qwen35_auto.log 2>&1 & disown

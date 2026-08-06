@@ -1,16 +1,4 @@
 #!/usr/bin/env python
-"""wsd.py — World-State Decoder: Viterbi decode chuỗi đáp án VQA theo phase trong scenario.
-
-Cơ sở đã đo: GT persistence giữa phase liền kề = direction 89.5% / orientation 82.6% / position ~72%,
-trong khi model per-phase orientation chỉ 48.7% (nhiều phase logits phẳng = mù cục bộ).
-Emission = probs 4 lựa chọn (map letter->option TEXT canonical); Transition = mined từ GT train (smoothed).
-Chỉ áp cho qtype yếu + có cấu trúc: orientation, position_ped, position_veh (direction 95% đã cao — giữ argmax).
-
-CLI:
-  mine                                # vqa_train GT -> wsd_transitions.json
-  gate  --samples vqa_val.json --probs probs.json      # decode + so accuracy vs argmax (val có GT)
-  decode --samples X --probs P --base-answers A --out O  # đáp án mới (test): thay qtype yếu bằng Viterbi
-"""
 from __future__ import annotations
 import argparse, json, re, collections, math, sys
 from pathlib import Path
@@ -19,7 +7,6 @@ CODE = Path("/workspace/AICC/code")
 WORK = CODE / "output_qwen35"
 QTYPES = {"orientation": r"orientation of", "position_ped": r"position of the pedestrian",
           "position_veh": r"position of the vehicle",
-          # WSD-v2 (persistence GT: direction 89.5 / speed 76.5 / attention 72.5 / distance 66.8 / action 46.4)
           "direction": r"\bdirection\b", "speed": r"\bspeed\b",
           "attention": r"line of sight|aware|attention|notice|looking",
           "distance": r"relative distance", "action": r"action|doing|moving|walking|running|crossing"}
@@ -40,7 +27,7 @@ def _canon(t):
 def _opts(sample):
     o = sample["options"]
     if isinstance(o, dict):
-        return [_canon(o[L]) for L in LETTERS if L in o]   # một số câu chỉ có 3 lựa chọn
+        return [_canon(o[L]) for L in LETTERS if L in o]
     return [_canon(x) for x in o[:4]]
 
 
@@ -49,8 +36,6 @@ def _gt_letter(s):
 
 
 def _chains(samples, types=None):
-    """(scenario,qtype,qnorm) -> {phase:int -> sample}. qnorm tách các biến thể câu cùng qtype
-    (vd distance ped-from-veh vs veh-from-ped) thành chuỗi riêng."""
     ch = collections.defaultdict(dict)
     for s in samples:
         t = _qt(s["question"])
@@ -100,7 +85,6 @@ class Decoder:
         return (pr.get(a, 0) + 0.5) / (tot + 0.5 * K)
 
     def decode_chain(self, t, chain, probs):
-        """chain: list (phase, sample); probs: id->[4]. Trả {id: letter_mới}."""
         states = sorted({st for _, s in chain for st in _opts(s)} | set(self.T[t]["prior"]))
         K = len(states)
         def emis(s):
@@ -110,7 +94,6 @@ class Decoder:
             for L, st, pv in zip(LETTERS, _opts(s), p):
                 e[st] = max(pv, EPS)
             return e
-        # Viterbi (log)
         V, bp = [], []
         for i, (ph, s) in enumerate(chain):
             e = emis(s)
@@ -126,7 +109,6 @@ class Decoder:
                         if sc > best: best, barg = sc, pv
                     v[st] = best + math.log(e[st]); b[st] = barg
                 V.append(v); bp.append(b)
-        # backtrack
         cur = max(V[-1], key=V[-1].get); path = [cur]
         for i in range(len(chain) - 1, 0, -1):
             cur = bp[i][cur]; path.append(cur)
@@ -153,7 +135,7 @@ def cmd_gate(samples_path, probs_path, types=None):
     samples = json.load(open(samples_path))
     probs = json.load(open(probs_path))
     new = _decode_all(samples, probs, types)
-    agg = collections.defaultdict(lambda: [0, 0, 0])  # [argmax_ok, viterbi_ok, n]
+    agg = collections.defaultdict(lambda: [0, 0, 0])
     tot = [0, 0, 0]
     for s in samples:
         t = _qt(s["question"]) or "other"

@@ -1,6 +1,4 @@
 #!/bin/bash
-# ctx_test_pipeline.sh — Predict test với adapter ctx-only, route 3 spatial (ori+pos_ped+pos_veh)
-# qua Viterbi lên nền WSD2 -> SUBMIT_Q35_CTX. Chỉ deploy phần đã gate PASS split-stable (+0.27 val).
 set -o pipefail; CODE=/workspace/AICC/code; cd "$CODE"; PY=/venv/qwen35/bin/python
 if [ "${_CT:-}" != "1" ]; then : > ctx_test_pipeline.log; export _CT=1
   nohup setsid bash "$0" </dev/null >> ctx_test_pipeline.log 2>&1 & disown

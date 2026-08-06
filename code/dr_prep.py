@@ -1,10 +1,4 @@
 #!/usr/bin/env python
-"""dr_prep.py — Photometric domain randomization cho frame train (Sim2Real).
-Mô phỏng degradation camera thật (CCTV/dashcam): blur, nén JPEG, phơi sáng lệch,
-noise, mất nét do downscale. KHÔNG hue (giữ GT màu), KHÔNG geometric (giữ GT vị trí).
-Pre-gen 1 biến thể/frame vào frames_dr/ + build processed_dr/vqa_train.json
-(mỗi ảnh: p=0.6 dùng biến thể DR, 0.4 giữ sạch — seed cố định theo path).
-"""
 import json, os, io, random, hashlib, sys
 from multiprocessing import Pool
 from PIL import Image, ImageFilter, ImageEnhance

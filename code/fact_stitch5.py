@@ -1,13 +1,4 @@
 #!/usr/bin/env python
-"""fact_stitch5.py — Fact-Stitch v5: ACTION + ATTENTION pillar per-phase.
-Oracle val (wsd2 preds): action_veh 97.4% / sight 85.7% / awareness 84.3% / action_ped 71.6%.
-Corrective-only như v4, chồng lên stack v2+v3+v4. Subject-guard cho action (phrase
-"going straight ahead" trong ped-caption 50/50 là ped hay vehicle -> bắt buộc look-back chủ ngữ).
-
-CLI:
-  val                       # gate: (v2+v3+v4) vs +v5A (veh_action,awareness,sight) vs +v5AB (+ped_action)
-  test --base DIR --out DIR --answers SUBTASK2.json --subs action_veh,awareness,sight[,action_ped]
-"""
 from __future__ import annotations
 import argparse, json, re, collections, shutil, sys
 from pathlib import Path
@@ -17,7 +8,7 @@ WORK = CODE / "output_qwen35"
 sys.path.insert(0, str(CODE))
 from fact_stitch import _opt_text
 
-SUB_Q = {  # subtype -> regex trên câu hỏi
+SUB_Q = {
     "action_ped": r"pedestrian's action|fine-grained action taken by the pedestrian",
     "action_veh": r"action taken by vehicle",
     "awareness":  r"awareness regarding",
@@ -30,7 +21,7 @@ AW_PAT = re.compile(
     r"(?:(?:is|was|were)\s+)?(?:almost noticed|(?:un)?aware of the (?:approaching )?vehicle|"
     r"notic(?:es|ed|ing) the (?:approaching )?vehicle)", re.I)
 SIGHT_PAT = re.compile(r"line of sight (is|was)\s+[^.,;]*", re.I)
-SIGHT_OBJ = {  # option -> phrase (directional = verbatim)
+SIGHT_OBJ = {
     "vehicle": "focused on the vehicle", "road surface": "focused on the road surface",
     "crossing destination": "focused on the crossing destination",
     "parked vehicle": "focused on the parked vehicle", "passing vehicle": "focused on the passing vehicle",
@@ -46,7 +37,6 @@ def _canon(t):
 
 
 def _action_vocab():
-    """Raw option texts của action questions (train) -> alternation longest-first."""
     vocab = set()
     for s in json.load(open(CODE / "output_qwen7b/processed/vqa_train.json")):
         ql = s["question"].lower()
@@ -71,12 +61,11 @@ def _subject_ok(text, start, subject):
     back = text[max(0, start - 100):start].lower()
     ip = max(back.rfind("pedestrian"), back.rfind(" he "), back.rfind(" she "))
     iv = max(back.rfind("vehicle"), back.rfind(" car "))
-    if ip < 0 and iv < 0: return None      # không rõ -> để caller quyết theo channel
+    if ip < 0 and iv < 0: return None
     return (ip > iv) if subject == "pedestrian" else (iv > ip)
 
 
 def build_oracle5(vqa_samples_path, answers):
-    """(scenario, phase) -> {subtype: option_text}"""
     out = collections.defaultdict(dict)
     for s in json.load(open(vqa_samples_path)):
         ql = s["question"].lower()
@@ -130,7 +119,6 @@ def _st_action(text, opt, subject, channel):
 
 
 def stitch_v5(text, orc, target, subs):
-    """orc = oracle5[(scn, phase)]; target = channel (pedestrian|vehicle)."""
     n = 0
     if target == "pedestrian":
         if "awareness" in subs and "awareness" in orc:

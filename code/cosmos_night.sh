@@ -1,9 +1,4 @@
 #!/bin/bash
-# cosmos_night.sh — Chuỗi overnight Sim2Real bundle:
-# [1] restyle 1447 raw overhead globals (Cosmos distilled-edge, ~4h)
-# [2] rebuild: vẽ bbox + re-crop local từ global restyled -> processed_cosmos
-# [3] bundle: DR (p=0.6) đè lên cây cosmos-remap -> processed_bundle/vqa_train.json
-# [4] retrain vqa_lora_bundle (bf16, ~6h) -> predict val -> gate not-degrade
 set -o pipefail; CODE=/workspace/AICC/code; cd "$CODE"; PY=/venv/qwen35/bin/python
 CPY=/workspace/cosmos25/.venv/bin/python
 if [ "${_CN:-}" != "1" ]; then : > cosmos_night.log; export _CN=1

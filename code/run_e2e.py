@@ -1,23 +1,5 @@
 #!/usr/bin/env python
-"""run_e2e.py — Full end-to-end reproduction: raw data -> trained adapters -> final submissions.
-
-No pretrained adapters, no precomputed probs, no shipped answers. Everything is rebuilt
-from the SynWTS training set and the official public-test package placed under data/
-(see README.md §2 for the expected layout).
-
-    python code/run_e2e.py                      # run every stage in order (resumable)
-    python code/run_e2e.py --stages prep_test   # run a single stage
-    python code/run_e2e.py --list               # show stages and their status
-
-Outputs
-    submissions/subtask2_vqa.json          final VQA answers
-    submissions/subtask1_captioning.json   final captions
-    work/                                  every intermediate (frames, adapters, probs, logs)
-
-Each stage writes a marker in work/.done/ and is skipped on re-run; delete the marker to
-force a re-run. Historical training/inference scripts are kept verbatim; this orchestrator
-redirects their hard-coded paths by patching module constants in subprocess wrappers.
-"""
+"""run_e2e.py — Full end-to-end reproduction: raw data -> trained adapters -> final submissions."""
 from __future__ import annotations
 import argparse
 import importlib.util
@@ -34,9 +16,7 @@ PKG = CODE.parent
 SPATIAL = "orientation,position_ped,position_veh"
 
 
-# ---------------------------------------------------------------- helpers
 def load_mod(name: str, attrs: dict | None = None):
-    """Load a package script as a module, optionally overriding path constants."""
     spec = importlib.util.spec_from_file_location(name, CODE / f"{name}.py")
     mod = importlib.util.module_from_spec(spec)
     sys.modules[name] = mod
@@ -55,10 +35,6 @@ def run(cmd, env=None, cwd=None):
 
 
 def py_snippet(script: str, patches: dict, call: str, env=None, raw: dict | None = None):
-    """Run `call` inside a fresh process with `script` loaded and constants patched.
-
-    `patches` values are Paths/plain literals; `raw` values are python expressions.
-    """
     lines = [
         "import importlib.util, sys, pathlib",
         "from pathlib import Path",
@@ -77,7 +53,6 @@ def py_snippet(script: str, patches: dict, call: str, env=None, raw: dict | None
 
 
 def ctx_patches(a) -> dict:
-    """Repoint ctx_builder's hard-coded roots (bbox + video) at data/ and work/."""
     syn = str(a.data / "synwts/data/annotations/bbox_annotated")
     t = str(a.work / "test_root/data/annotations")
     vids = (str(a.data / "synwts/data/videos"), str(a.work / "test_root/data/videos"))
@@ -88,10 +63,6 @@ def ctx_patches(a) -> dict:
 
 
 def flatten_synwts_for_caption(a) -> Path:
-    """SynWTS ships a nested ``normal_trimmed/`` group; the deployed caption
-    preprocessing saw those scenarios flattened to the split top level (the
-    preprocessor skips the container dir by name). Build that flattened view
-    with symlinks under work/ — raw data/ is never modified."""
     flat = a.work / "synwts_flat/data"
     if flat.exists():
         shutil.rmtree(flat.parent)
@@ -106,8 +77,6 @@ def flatten_synwts_for_caption(a) -> Path:
             else:
                 (dst / e.name).symlink_to(e.resolve())
 
-    # every annotation tree nests normal_trimmed under the split dir; frame jobs
-    # are gated on per-scenario bbox JSONs, so bbox must be lifted too
     for split in ("train", "val"):
         for sub in ("videos", "annotations/caption", "annotations/vqa",
                     "annotations/bbox_annotated/pedestrian",
@@ -119,11 +88,6 @@ def flatten_synwts_for_caption(a) -> Path:
 
 def sharded_predict(samples_json, out_probs, out_answers, adapter, quant,
                     qtypes="", batch=4, shard=2000, env_extra=None):
-    """Predict via run_qwen35_vqa.py in resumable shards (a crash never loses >1 shard).
-
-    Shard size is a multiple of the batch size, so per-batch composition is identical
-    to a single uninterrupted run and the probs are unaffected by sharding.
-    """
     workdir = Path(str(out_probs) + ".shards")
     workdir.mkdir(parents=True, exist_ok=True)
     data = json.load(open(samples_json))
@@ -132,7 +96,6 @@ def sharded_predict(samples_json, out_probs, out_answers, adapter, quant,
     aw = Path(adapter) / "adapter_model.safetensors"
     prov = {"adapter": str(adapter), "quant": quant, "qtypes": qtypes,
             "batch": batch, "shard": shard, "n": len(data),
-            # fingerprint so a retrained adapter at the same path invalidates the cache
             "adapter_fp": [aw.stat().st_size, int(aw.stat().st_mtime)] if aw.exists() else None}
     pv = workdir / "provenance.json"
     if pv.exists() and json.load(open(pv)) != prov:
@@ -165,7 +128,6 @@ def sharded_predict(samples_json, out_probs, out_answers, adapter, quant,
     print(f"[e2e] merged {len(probs):,} -> {out_probs}", flush=True)
 
 
-# ---------------------------------------------------------------- stages
 def st_prep_test(a):
     ext = a.data / "WTS_TASK/EXTERNAL_WTS_DATASET_TEST"
     inf = a.data / "WTS_DATASET_PUBLIC_TEST"
@@ -197,7 +159,7 @@ def st_prep_test(a):
     run([sys.executable, CODE / "preprocess_vqa.py", "--workers", a.workers, "--force"], env=env)
     run([sys.executable, CODE / "preprocess_caption.py", "--workers", a.workers, "--force"], env=env)
     ref = PKG / "data_meta/vqa_test.json"
-    if ref.exists():  # integrity check against frozen metadata (id/question/options, in order)
+    if ref.exists():
         new = json.load(open(a.work / "test_prep/vqa/processed/vqa_val.json"))
         old = json.load(open(ref))
         same = len(new) == len(old) and all(
@@ -214,7 +176,6 @@ def st_prep_train(a):
            "AICC26_WORK_ROOT_QWEN7B": a.work / "train_prep/vqa",
            "AICC26_WORK_ROOT_QWEN7B_CAP": a.work / "train_prep/caption"}
     run([sys.executable, CODE / "preprocess_vqa.py", "--workers", a.workers, "--force"], env=env)
-    # caption uses the flattened view (normal_trimmed lifted) to match the deployed data prep
     flat = flatten_synwts_for_caption(a)
     run([sys.executable, CODE / "preprocess_caption.py", "--workers", a.workers, "--force"],
         env={**env, "AICC26_DATA_ROOT": flat})
@@ -230,7 +191,6 @@ def st_train_base(a):
 
 
 def st_predict_base(a):
-    # bf16 predict spikes past 31 GB at batch 4 on long option groups — batch 2 fits 32 GB cards
     sharded_predict(a.work / "test_prep/vqa/processed/vqa_val.json",
                     a.work / "probs/base_bf16_probs.json", a.work / "vqa/base_answers.json",
                     a.work / "adapters/vqa_lora", "bf16", batch=a.predict_batch or 2)
@@ -243,9 +203,7 @@ def st_predict_8bit(a):
 
 
 def st_compose_wsd2(a):
-    """Mine transitions from train GT, then Viterbi: spatial (bf16 probs) + action (8-bit probs)."""
     T = str(a.work / "test_prep/vqa/processed/vqa_val.json")
-    # verbatim cmd_mine reads CODE/output_qwen7b/processed/vqa_train.json -> tiny shim
     import tempfile
     shim = Path(tempfile.mkdtemp(prefix="e2e_mine_"))
     (shim / "output_qwen7b/processed").mkdir(parents=True)
@@ -291,10 +249,6 @@ def st_predict_ctx(a):
 
 
 def st_predict_bundle(a):
-    """Bundle (reality-transfer) route: standard bf16 predict of the full test with the
-    vqa_lora_bundle adapter. Only the TRAINING of that adapter needs Cosmos (README
-    appendix); prediction is plain inference, so this stage runs from the shipped
-    artifact when work/ has no freshly trained copy."""
     ad = a.work / "adapters/vqa_lora_bundle"
     if not (ad / "adapter_model.safetensors").exists():
         src = PKG / "artifacts/adapters/vqa_lora_bundle"
@@ -322,7 +276,7 @@ def st_compose_vqa(a):
         print("[e2e] bundle probs present but --no-bundle set -> ignored")
     if a.with_bundle and not bundle.exists():
         sys.exit(f"bundle route needs {bundle} — run the predict_bundle stage first")
-    if a.with_bundle and bundle.exists():  # reality-transfer route (submitted best)
+    if a.with_bundle and bundle.exists():
         SP = set(SPATIAL.split(",")); VIT = SP | {"action"}
         TGT = {"direction", "speed", "attention", "distance", "action"}
         samples = json.load(open(T))
@@ -350,7 +304,6 @@ def st_compose_vqa(a):
         print("[e2e] bundle probs found -> reality-transfer route applied")
     else:
         print("[e2e] no bundle probs (optional stage skipped) -> final = ctx stage")
-    # ---- final validation: id coverage + every answer inside its own options
     meta = {s_["id"]: s_ for s_ in json.load(open(T))}
     ans = json.load(open(final))
     ids = [x["id"] for x in ans]
@@ -361,9 +314,7 @@ def st_compose_vqa(a):
     for x in ans:
         opts = meta[x["id"]]["options"]
         n = len(opts)
-        if "abcd".index(x["correct"]) >= n:  # never seen on the deployed model; guard for retrains
-            # 8-bit base probs as neutral tiebreak — per-id route provenance is not
-            # tracked, and this path has never fired on real data (0/19,624)
+        if "abcd".index(x["correct"]) >= n:
             pr = p8.get(x["id"], [0.25] * 4)
             x["correct"] = "abcd"[max(range(n), key=lambda i: pr[i])]
             clamped += 1
@@ -397,7 +348,6 @@ def st_predict_caption(a):
                    str(test_meta), str(a.work / "caption/caption_test_preds.json")),
                env={"AICC26_QWEN35_QUANT": a.quant_caption,
                     "AICC26_CAP_PRED_ADAPTER": a.work / "adapters/caption_dpo_lora"})
-    # preds map {scenario|phase|target: caption} -> submission dict {scenario: [phase entries]}
     preds = json.load(open(a.work / "caption/caption_test_preds.json"))
     meta = json.load(open(test_meta))
     sub: dict[str, dict] = {}
@@ -417,7 +367,6 @@ def st_predict_caption(a):
 
 
 def st_stitch(a):
-    """Fact-Stitch v2 -> v3 -> v4 -> v5 with oracles mirroring the deployed stages."""
     import tempfile
     shim = Path(tempfile.mkdtemp(prefix="e2e_shim_"))
     try:
@@ -443,7 +392,6 @@ def st_stitch(a):
         fs4.cmd_test(str(w / "base_dir"), str(w / "v4"), str(a.work / "vqa/answers_wsd.json"))
         fs5.cmd_test(str(w / "v4"), str(w / "v5"), str(a.work / "vqa/answers_wsd2.json"),
                      fs5.V5A)
-        # ---- final validation: every (scenario, phase) from the caption metadata present
         cap = json.load(open(w / "v5/subtask1_captioning.json"))
         need = {(s_["scenario"], str(s_["phase_label"]))
                 for s_ in json.load(open(a.work / "test_prep/caption/processed/caption_val.json"))}
@@ -479,8 +427,6 @@ STAGES = [("prep_test", st_prep_test), ("prep_train", st_prep_train),
 
 
 def seed_shipped_adapters(a):
-    """--skip-training: copy the shipped deployed adapters into work/ and mark
-    the train stages done, so the run goes straight to prediction."""
     src = PKG / "artifacts/adapters"
     for stage, name in [("train_base", "vqa_lora"), ("train_ctx", "vqa_lora_ctx"),
                         ("train_caption", "caption_dpo_lora")]:
@@ -490,7 +436,7 @@ def seed_shipped_adapters(a):
         if not d.exists():
             shutil.copytree(s, d)
         (a.work / ".done" / stage).touch()
-    b = src / "vqa_lora_bundle"  # no train stage of its own; used by predict_bundle
+    b = src / "vqa_lora_bundle"
     if (b / "adapter_model.safetensors").exists() and not (a.work / "adapters/vqa_lora_bundle").exists():
         shutil.copytree(b, a.work / "adapters/vqa_lora_bundle")
     print("[e2e] --skip-training: shipped adapters seeded, train stages marked done")
@@ -515,7 +461,7 @@ def main():
                          "(bf16: 2, 8-bit: 4) — raise on larger GPUs, must divide 2000")
     ap.add_argument("--list", action="store_true")
     a = ap.parse_args()
-    a.with_bundle = not a.no_bundle  # bundle route (submitted best) is the default
+    a.with_bundle = not a.no_bundle
     done = a.work / ".done"; done.mkdir(parents=True, exist_ok=True)
     for sub in ("probs", "vqa", "adapters", "caption"):
         (a.work / sub).mkdir(parents=True, exist_ok=True)

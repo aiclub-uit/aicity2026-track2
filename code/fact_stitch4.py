@@ -1,13 +1,4 @@
 #!/usr/bin/env python
-"""fact_stitch4.py — Fact-Stitch v4: SPATIAL PILLAR per-phase, oracle = đáp án WSD-Viterbi
-(orientation 79.6% / pos_ped 81.4% / pos_veh 75.6% — giờ VƯỢT caption free-form ~60%).
-Corrective-only: thay phrase spatial trong caption bằng option text (protocol-verbatim). Per-PHASE
-(khác v2/v3 per-scenario vì spatial đổi theo phase). Chồng lên v2+v3.
-
-CLI:
-  val                      # gate: (v2+v3) vs (v2+v3+v4) per-metric trên MBR-300
-  test --base DIR --out DIR --answers SUBTASK2.json
-"""
 from __future__ import annotations
 import argparse, json, re, collections, shutil, sys
 from pathlib import Path
@@ -22,7 +13,6 @@ V3_SLOTS = {"color_upper", "color_lower", "lower_item", "brightness", "surface_c
 QT = {"orientation": r"orientation of", "position_ped": r"position of the pedestrian",
       "position_veh": r"position of the vehicle"}
 
-# regex tìm phrase hiện có trong caption
 FIND = {
     "position_ped": r"diagonally to the (?:left|right),? in front of the vehicle|directly in front of the vehicle|on the (?:left|right),? behind the vehicle|on the (?:left|right) of the vehicle|behind the vehicle",
     "position_veh": r"diagonally to the (?:left|right),? in front of the pedestrian|behind to the (?:left|right) of the pedestrian|(?:on the )?(?:left|right) side of the pedestrian|in front of the pedestrian|behind the pedestrian",
@@ -49,7 +39,6 @@ def _repl_text(qtype, opt):
 
 
 def build_spatial_oracle(vqa_samples_path, answers):
-    """(scenario, phase) -> {qtype: option_text}"""
     samples = json.load(open(vqa_samples_path))
     out = collections.defaultdict(dict)
     for s in samples:
@@ -69,7 +58,7 @@ def stitch_v4(text, sp, target):
         if tgt != target or qtype not in sp: continue
         repl = _repl_text(qtype, sp[qtype])
         m = re.search(FIND[qtype], text, re.I)
-        if not m: continue                       # corrective-only, không additive
+        if not m: continue
         if _canon(m.group(0)) == _canon(repl): continue
         text = text[:m.start()] + repl + text[m.end():]
         n += 1
@@ -87,7 +76,7 @@ def _apply_all(text, o2, o3, sp, target, use_v4):
 
 def cmd_val():
     from harmonize_attrs import _score
-    ans = json.load(open(WORK / "vqa_val_preds_wsd.json"))     # Viterbi'd val answers
+    ans = json.load(open(WORK / "vqa_val_preds_wsd.json"))
     src = CODE / "output_qwen7b/processed/vqa_val.json"
     o2, o3 = oracle_v2(src, ans), build_oracle_v3(src, ans)
     sp = build_spatial_oracle(src, ans)

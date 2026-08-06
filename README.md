@@ -106,7 +106,7 @@ versions, so scores land within a small band of these values
 
 | File | Role |
 |---|---|
-| `run_e2e.py` | orchestrator (the only new file; everything below is the deployed code, kept verbatim) |
+| `run_e2e.py` | orchestrator (the only new file; everything below is the deployed competition code) |
 | `preprocess_vqa.py` / `preprocess_caption.py` | frames + bbox drawing + crops + metadata (cv2 only) |
 | `prepare_test_root.py` | mounts the official test package as a val-as-test layout |
 | `run_qwen35_vqa.py` | VQA train / predict (letter-logit, LoRA, bf16/8-bit/4-bit) |
@@ -115,8 +115,6 @@ versions, so scores land within a small band of these values
 | `wsd.py` | transition mining + canonical-state Viterbi decoding |
 | `fact_stitch.py`, `fact_stitch3/4/5.py` | caption fact correction waves v2–v5 |
 | `cosmos_restyle_prep.py`, `dr_prep.py`, `*.sh` | optional bundle route + historical deploy pipelines |
-
-Data-usage and rules compliance: see [COMPLIANCE.md](COMPLIANCE.md).
 
 ## Appendix — retraining the bundle adapter from scratch (Cosmos restyle)
 

@@ -1,8 +1,4 @@
 #!/bin/bash
-# ctx_pipeline.sh — Retrain VQA ctx+bbox (chống Sim2Real: bbox-dropout 30%, ctx scheduled-sampling 25%)
-# [1] full train (adapter vqa_lora_ctx, KHÔNG đụng vqa_lora best)
-# [2] predict val ×3 config (both/ctx/bbox) + save probs
-# [3] gate: gate_ctx.py per-qtype vs baseline + Viterbi compound + split-half
 set -o pipefail; CODE=/workspace/AICC/code; cd "$CODE"; PY=/venv/qwen35/bin/python
 if [ "${_CX:-}" != "1" ]; then : > ctx_pipeline.log; export _CX=1
   nohup setsid bash "$0" </dev/null >> ctx_pipeline.log 2>&1 & disown

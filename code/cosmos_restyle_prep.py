@@ -1,19 +1,11 @@
 #!/usr/bin/env python
-"""cosmos_restyle_prep.py — Sim2Real restyle cho overhead global keyframes (train).
-Stage dump   : tái lập selection của run7_qwen7b (deterministic), lưu frame RAW (không bbox,
-               không resize) + metadata (bbox raw-coords, crop mode) cho từng keyframe output.
-Stage spec   : đóng mỗi raw frame thành mp4 1-frame + spec JSON (edge control, prompt CCTV).
-Stage rebuild: từ global đã restyle -> vẽ bbox (scale coords) + re-crop local -> cây
-               processed_cosmos/frames_{global,local}/... cùng tên file; fallback frame gốc
-               nếu thiếu output. Sau đó build vqa_train.json remap overhead->cosmos.
-"""
 import json, os, sys, argparse, subprocess
 sys.path.insert(0, '/workspace/AICC/code')
 import cv2
 try:
-    import preprocess_vqa as R7   # bản preprocessing tách trong gói (đủ 22 symbol, không cần torch)
+    import preprocess_vqa as R7
 except ImportError:
-    import run7_qwen7b as R7      # fallback layout máy dev lịch sử
+    import run7_qwen7b as R7
 
 OUT = '/workspace/AICC/code/cosmos_work'
 RAW = f'{OUT}/raw'
@@ -105,7 +97,6 @@ def cmd_dump():
             f.write(json.dumps(r) + '\n')
     uniq = len({r['raw'] for r in rows})
     print(f'meta rows: {len(rows)} | unique raw frames: {uniq}')
-    # đối chiếu coverage với processed hiện có
     import glob
     exist = {os.path.basename(p) for p in glob.glob(f'{PROC}/frames_global/train/*/overhead_view/*.jpg')}
     got = {r['gname'] for r in rows}
@@ -174,7 +165,7 @@ def cmd_rebuild():
             loc = R7._resize_keep_aspect(loc, R7.FRAME_CFG.local_max_side)
             cv2.imwrite(ldst, loc, [cv2.IMWRITE_JPEG_QUALITY, R7.FRAME_CFG.jpeg_quality])
             n_ok += 1
-        else:  # fallback: copy frame gốc đã processed
+        else:
             import shutil
             src_g = f'{PROC}/frames_global/{r["rel"]}/{r["gname"]}'
             src_l = f'{PROC}/frames_local/{r["rel"]}/{r["gname"]}'
@@ -182,7 +173,6 @@ def cmd_rebuild():
             if os.path.exists(src_l): shutil.copy2(src_l, ldst)
             n_fb += 1
     print(f'rebuild: {n_ok} restyled, {n_fb} fallback')
-    # build vqa_train.json: overhead -> cosmos tree (nếu file tồn tại), vehicle giữ gốc
     d = json.load(open(f'{PROC}/vqa_train.json'))
     os.makedirs(f'{DEST}', exist_ok=True)
     n_map = n_tot = 0

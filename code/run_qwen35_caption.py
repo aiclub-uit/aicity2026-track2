@@ -1,13 +1,4 @@
 #!/usr/bin/env python
-"""run_qwen35_caption.py — LoRA QLoRA fine-tune Qwen3.5-9B cho CAPTION (ped/veh per-phase).
-
-Venv /venv/qwen35. Tái dùng output_qwen7b_caption/processed/caption_{train,val}.json.
-Eval: generate caption -> score = local_eval.evaluate_captions (caption_average). So Qwen2.5 val 31.39.
-
-CLI:
-  python run_qwen35_caption.py train [--limit N]
-  python run_qwen35_caption.py eval  [--limit N]
-"""
 from __future__ import annotations
 import argparse, json, os, sys, statistics, collections, re
 from pathlib import Path
@@ -17,14 +8,14 @@ os.environ.setdefault("HF_HOME", "/workspace/hf_cache")
 WORK = Path("/workspace/AICC/code/output_qwen35")
 LORA_OUT = Path(os.environ.get("AICC26_QWEN35_CAP_ADAPTER", str(WORK / "caption_lora")))
 DATA = Path("/workspace/AICC/code/output_qwen7b_caption/processed")
-STERHINT = os.environ.get("AICC26_STERHINT", "")  # "_sterhint" -> đọc caption_{split}_sterhint.json (STER-VLM appearance-hint)
+STERHINT = os.environ.get("AICC26_STERHINT", "")
 NUM_IMAGES = int(os.environ.get("QWEN35_NUM_IMAGES", "4"))
 sys.path.insert(0, "/workspace/AICC/src/src")
 LORA_TARGETS = ["q_proj", "k_proj", "v_proj", "o_proj",
                 "in_proj_qkv", "out_proj", "gate_proj", "up_proj", "down_proj"]
 
 
-QUANT = os.environ.get("AICC26_QWEN35_QUANT", "8bit")  # 4bit | 8bit | bf16 (caption: 8bit/bf16 cho chất lượng)
+QUANT = os.environ.get("AICC26_QWEN35_QUANT", "8bit")
 
 
 def _load(for_train=False):
@@ -57,7 +48,7 @@ def build_ds(split, limit=None):
     from datasets import Dataset
     raw = json.load(open(DATA / f"caption_{split}{STERHINT}.json"))
     wmap = {}
-    if os.environ.get("AICC26_LOSS_WEIGHTS"):  # CIDErBtw: weight /sample theo distinctiveness
+    if os.environ.get("AICC26_LOSS_WEIGHTS"):
         wmap = json.load(open(os.environ["AICC26_LOSS_WEIGHTS"]))
         print(f"[q35cap] weighted-loss ON ({len(wmap)} weights)")
     rows = [{"images": _imgs(s), "q": _prompt(s), "ans": s["conversations"][1]["value"].strip(),
@@ -74,7 +65,7 @@ class Collator:
     def __call__(self, batch):
         import copy
         from qwen_vl_utils import process_vision_info
-        ex = batch[0]  # batch=1
+        ex = batch[0]
         uc = [{"type": "image", "image": p} for p in ex["images"]] + [{"type": "text", "text": ex["q"]}]
         um = [{"role": "user", "content": uc}]
         fm = um + [{"role": "assistant", "content": [{"type": "text", "text": ex["ans"]}]}]
@@ -113,7 +104,7 @@ def cmd_train(limit):
         logging_steps=10, save_strategy="no", report_to=[], remove_unused_columns=False,
         gradient_checkpointing=True, gradient_checkpointing_kwargs={"use_reentrant": False})
     TrainerCls = Trainer
-    if os.environ.get("AICC26_LOSS_WEIGHTS"):  # CIDErBtw weighted CE (batch=1)
+    if os.environ.get("AICC26_LOSS_WEIGHTS"):
         class WTrainer(Trainer):
             def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
                 w = inputs.pop("w", None)
@@ -136,7 +127,7 @@ def cmd_eval(limit):
         adapter = Path(os.environ["AICC26_EVAL_ADAPTER"])
     else:
         adapter = (WORK / "caption_dpo_lora") if (WORK / "caption_dpo_lora").exists() else LORA_OUT
-    if os.environ.get("AICC26_CAP_PRED_ADAPTER"):  # override cho A/B adapter (vd DPO round-2)
+    if os.environ.get("AICC26_CAP_PRED_ADAPTER"):
         adapter = Path(os.environ["AICC26_CAP_PRED_ADAPTER"])
     if adapter.exists():
         model = PeftModel.from_pretrained(model, str(adapter)); print(f"[q35cap] adapter {adapter}")
@@ -144,8 +135,8 @@ def cmd_eval(limit):
     raw = json.load(open(DATA / f"caption_val{STERHINT}.json"))
     if limit:
         raw = raw[:limit]
-    NCAND = int(os.environ.get("QWEN35_EVAL_NCAND", "5"))     # best-of-N (1=greedy)
-    MAXNEW = int(os.environ.get("QWEN35_EVAL_MAXNEW", "256"))  # khớp Qwen2.5 (220) + đuôi ped
+    NCAND = int(os.environ.get("QWEN35_EVAL_NCAND", "5"))
+    MAXNEW = int(os.environ.get("QWEN35_EVAL_MAXNEW", "256"))
     print(f"[q35cap] eval ncand={NCAND} max_new={MAXNEW}")
     from tqdm import tqdm
     gen = {}
@@ -162,11 +153,10 @@ def cmd_eval(limit):
                 out = model.generate(**inp, max_new_tokens=MAXNEW, min_new_tokens=40, do_sample=True,
                                      temperature=0.7, top_p=0.9, num_return_sequences=NCAND)
         cands = [c.strip() for c in proc.batch_decode(out[:, inp["input_ids"].shape[1]:], skip_special_tokens=True)]
-        pred = _mbr_select(cands)  # reference-free MBR best-of-N (deploy được trên test)
+        pred = _mbr_select(cands)
         gen[s["id"]] = (s, pred)
     json.dump({sid: pred for sid, (s, pred) in gen.items()}, open(WORK / "caption_val_preds.json", "w"))
     print(f"[q35cap] saved preds -> {WORK / 'caption_val_preds.json'}")
-    # build pred/ref dicts (scenario -> entries), dedup (scenario,label)
     tg, tp = {}, {}
     for sid, (s, pred) in gen.items():
         key = (s["scenario"], str(s["phase_label"]))
@@ -183,13 +173,12 @@ def cmd_eval(limit):
 
 DPO_PAIRS = Path(os.environ.get("AICC26_DPO_PAIRS", str(WORK / "dpo_pairs.json")))
 DPO_OUT = Path(os.environ.get("AICC26_DPO_OUT", str(WORK / "caption_dpo_lora")))
-SFT_SRC = Path(os.environ.get("AICC26_SFT_SRC", str(WORK / "caption_lora")))  # adapter nguồn cho DPO
-DPO_SUBSET = int(os.environ.get("QWEN35_DPO_SUBSET", "1000"))  # số mẫu sinh cặp (1-round, giới hạn)
+SFT_SRC = Path(os.environ.get("AICC26_SFT_SRC", str(WORK / "caption_lora")))
+DPO_SUBSET = int(os.environ.get("QWEN35_DPO_SUBSET", "1000"))
 DPO_NCAND = int(os.environ.get("QWEN35_DPO_NCAND", "4"))
 
 
 def _sent_score(pred, ref):
-    """sentence-level (BLEU4+METEOR+ROUGE-L)/3 — chấm candidate vs GT."""
     from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
     from nltk.translate.meteor_score import meteor_score
     p, r = pred.split(), ref.split()
@@ -200,7 +189,6 @@ def _sent_score(pred, ref):
     except Exception: b = 0.0
     try: m = meteor_score([r], p)
     except Exception: m = 0.0
-    # rouge-l qua LCS
     n, mm = len(p), len(r); dp = [0]*(mm+1)
     for i in range(1, n+1):
         prev = 0
@@ -211,8 +199,6 @@ def _sent_score(pred, ref):
 
 
 def _mbr_select(cands):
-    """MBR reference-free: chọn candidate tối đa Σ _sent_score(cand_i, cand_j) vs các cand khác.
-    Deploy được trên test (không cần GT). cands=1 -> trả thẳng."""
     cs = [c for c in cands if c.strip()] or cands
     if len(cs) == 1:
         return cs[0]
@@ -225,9 +211,6 @@ def _mbr_select(cands):
 
 
 def _composite_scores(records):
-    """Chấm COMPOSITE (BLEU4+METEOR+ROUGE-L+0.1·CIDEr) per (sample,candidate) bằng pycocoevalcap.
-    CIDEr lấy IDF từ TOÀN corpus candidate -> distinctive-aware. records=[{'cands':[...], 'gt':str}].
-    Trả list[dict{cand: composite}] song song records."""
     from pycocoevalcap.bleu.bleu import Bleu
     from pycocoevalcap.meteor.meteor import Meteor
     from pycocoevalcap.rouge.rouge import Rouge
@@ -242,7 +225,7 @@ def _composite_scores(records):
     tok = PTBTokenizer()
     gts_t, res_t = tok.tokenize(gts_d), tok.tokenize(res_d)
     keys = list(gts_t.keys())
-    _, bl = Bleu(4).compute_score(gts_t, res_t)   # bl[3] = BLEU-4 per sample
+    _, bl = Bleu(4).compute_score(gts_t, res_t)
     _, me = Meteor().compute_score(gts_t, res_t)
     _, ro = Rouge().compute_score(gts_t, res_t)
     _, ci = Cider().compute_score(gts_t, res_t)
@@ -254,8 +237,6 @@ def _composite_scores(records):
 
 
 def cmd_build_dpo(limit):
-    """1-round: sinh DPO_NCAND candidate, chấm bằng COMPOSITE (có CIDEr) -> chosen=best/rejected=worst.
-    FIX: reward composite thay vì (BLEU+MET+ROUGE)/3 -> thưởng distinctive coverage, không thiên ngắn."""
     import torch, copy, random
     from peft import PeftModel
     from qwen_vl_utils import process_vision_info
@@ -295,7 +276,6 @@ def cmd_build_dpo(limit):
 
 
 def cmd_train_dpo():
-    """DPO 1-round tren SFT adapter (ref = base, adapter-disabled). trl 1.6.0 vision DPO."""
     import torch
     from PIL import Image
     from peft import PeftModel
@@ -316,7 +296,7 @@ def cmd_train_dpo():
                     num_train_epochs=1.0, learning_rate=5e-6,
                     beta=float(os.environ.get("AICC26_DPO_BETA", "0.1")), bf16=True, logging_steps=10,
                     save_strategy="no", report_to=[], remove_unused_columns=False, max_length=8192,
-                    truncation_mode="keep_start",  # FIX: 2048 cắt image tokens 4-ảnh -> 8192
+                    truncation_mode="keep_start",
                     gradient_checkpointing=True, gradient_checkpointing_kwargs={"use_reentrant": False})
     DPOTrainer(model=model, ref_model=None, args=cfg, train_dataset=ds, processing_class=proc).train()
     DPO_OUT.mkdir(parents=True, exist_ok=True); model.save_pretrained(str(DPO_OUT))
@@ -324,13 +304,12 @@ def cmd_train_dpo():
 
 
 def cmd_predict_submission(testjson, out, limit=None):
-    """Gen caption Qwen3.5 trên TEST (greedy 256) -> {scenario|phase|target: caption} để build submission."""
     import torch, copy
     from peft import PeftModel
     from qwen_vl_utils import process_vision_info
     proc, model = _load(for_train=False)
     adapter = (WORK / "caption_dpo_lora") if (WORK / "caption_dpo_lora").exists() else LORA_OUT
-    if os.environ.get("AICC26_CAP_PRED_ADAPTER"):  # override cho A/B adapter (vd DPO round-2)
+    if os.environ.get("AICC26_CAP_PRED_ADAPTER"):
         adapter = Path(os.environ["AICC26_CAP_PRED_ADAPTER"])
     if adapter.exists():
         model = PeftModel.from_pretrained(model, str(adapter)); print(f"[q35cap] adapter {adapter}")
@@ -340,9 +319,8 @@ def cmd_predict_submission(testjson, out, limit=None):
         raw = raw[:limit]
     MAXNEW = int(os.environ.get("QWEN35_EVAL_MAXNEW", "256"))
     BATCH = int(os.environ.get("QWEN35_BATCH", "8"))
-    NCAND = int(os.environ.get("QWEN35_PRED_NCAND", "1"))  # 1=greedy (mặc định giữ nguyên); >1 = MBR best-of-N
-    proc.tokenizer.padding_side = "left"  # BẮT BUỘC cho batched generation (prompt right-aligned)
-    # dedup 1 sample/key, sort theo (num_images, target) -> batch đồng nhất, ít padding
+    NCAND = int(os.environ.get("QWEN35_PRED_NCAND", "1"))
+    proc.tokenizer.padding_side = "left"
     uniq = {}
     for s in raw:
         k = f"{s['scenario']}|{s['phase_label']}|{s['target']}"
@@ -365,11 +343,10 @@ def cmd_predict_submission(testjson, out, limit=None):
         with torch.inference_mode():
             if NCAND <= 1:
                 o = model.generate(**inp, max_new_tokens=MAXNEW, do_sample=False)
-            else:  # sample N candidate/prompt -> MBR reference-free (deploy được, không cần GT)
+            else:
                 o = model.generate(**inp, max_new_tokens=MAXNEW, min_new_tokens=40, do_sample=True,
                                    temperature=0.7, top_p=0.9, num_return_sequences=NCAND)
         outs = proc.batch_decode(o[:, inp["input_ids"].shape[1]:], skip_special_tokens=True)
-        # num_return_sequences: hàng của prompt gi nằm ở [gi*NCAND : (gi+1)*NCAND]
         for gi, (k, s) in enumerate(chunk):
             if NCAND <= 1:
                 preds[k] = outs[gi].strip()
