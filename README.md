@@ -57,6 +57,10 @@ Final outputs: `submissions/subtask2_vqa.json` and
 `submissions/subtask1_captioning.json`. Intermediates stay under `work/`;
 the run is resumable (append `--list` for stage status).
 
+To skip the ~2 GPU-days of retraining, append `--skip-training`: the run then
+uses our deployed LoRA adapters shipped in `artifacts/adapters/` (git LFS) and
+goes straight to prediction. Omit the flag for the full from-scratch reproduction.
+
 ## 4. Expected results
 
 Target scores on the public test set: **VQA accuracy ≈ 84.7**, **caption S1 ≈ 29.9–30.0**.

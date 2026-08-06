@@ -455,6 +455,21 @@ STAGES = [("prep_test", st_prep_test), ("prep_train", st_prep_train),
           ("predict_caption", st_predict_caption), ("stitch", st_stitch)]
 
 
+def seed_shipped_adapters(a):
+    """--skip-training: copy the shipped deployed adapters into work/ and mark
+    the train stages done, so the run goes straight to prediction."""
+    src = PKG / "artifacts/adapters"
+    for stage, name in [("train_base", "vqa_lora"), ("train_ctx", "vqa_lora_ctx"),
+                        ("train_caption", "caption_dpo_lora")]:
+        s, d = src / name, a.work / "adapters" / name
+        if not (s / "adapter_model.safetensors").exists():
+            sys.exit(f"--skip-training: shipped adapter missing: {s}")
+        if not d.exists():
+            shutil.copytree(s, d)
+        (a.work / ".done" / stage).touch()
+    print("[e2e] --skip-training: shipped adapters seeded, train stages marked done")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--data", type=Path, default=PKG / "data")
@@ -467,11 +482,15 @@ def main():
     ap.add_argument("--quant-caption", default="bf16", choices=["bf16", "8bit", "4bit"])
     ap.add_argument("--with-bundle", action="store_true",
                     help="route reality-transfer probs (requires work/probs/bundle_probs.json)")
+    ap.add_argument("--skip-training", action="store_true",
+                    help="use the shipped adapters in artifacts/ instead of retraining")
     ap.add_argument("--list", action="store_true")
     a = ap.parse_args()
     done = a.work / ".done"; done.mkdir(parents=True, exist_ok=True)
     for sub in ("probs", "vqa", "adapters", "caption"):
         (a.work / sub).mkdir(parents=True, exist_ok=True)
+    if a.skip_training:
+        seed_shipped_adapters(a)
     if a.list:
         for n, _ in STAGES:
             print(f"  {'✔' if (done / n).exists() else '·'} {n}")
