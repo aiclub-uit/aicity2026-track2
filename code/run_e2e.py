@@ -2,6 +2,7 @@
 """run_e2e.py — Full end-to-end reproduction: raw data -> trained adapters -> final submissions."""
 from __future__ import annotations
 import argparse
+import hashlib
 import importlib.util
 import json
 import os
@@ -248,6 +249,75 @@ def st_predict_ctx(a):
                     batch=a.predict_batch or 4)
 
 
+def cosmos_paths(a):
+    cw = a.work / "cosmos"
+    pat = {"OUT": str(cw), "RAW": str(cw / "raw"), "META": str(cw / "meta.jsonl"),
+           "SPECS": str(cw / "specs"), "RESTYLED": str(cw / "restyled"),
+           "PROC": str(a.work / "train_prep/vqa/processed"),
+           "DEST": str(cw / "processed_cosmos")}
+    env = {"AICC26_DATA_ROOT": a.data / "synwts/data",
+           "AICC26_PROJECT_ROOT": a.work / "train_prep",
+           "AICC26_WORK_ROOT_QWEN7B": a.work / "train_prep/vqa"}
+    return cw, pat, env
+
+
+def st_cosmos_prep(a):
+    cw, pat, env = cosmos_paths(a)
+    cw.mkdir(parents=True, exist_ok=True)
+    py_snippet("cosmos_restyle_prep", pat, "cmd_dump()", env=env)
+    py_snippet("cosmos_restyle_prep", pat, "cmd_spec()", env=env)
+    print(f"[e2e] specs ready: {cw}/specs — restyle them with nvidia/Cosmos-Transfer2.5-2B "
+          f"into {cw}/restyled, then run --stages train_bundle")
+
+
+def st_train_bundle(a):
+    cw, pat, env = cosmos_paths(a)
+    restyled = [f for f in (cw / "restyled").glob("*.jpg")
+                if "control_edge" not in f.name] if (cw / "restyled").exists() else []
+    if not restyled:
+        sys.exit(f"no restyled frames in {cw}/restyled — run --stages cosmos_prep, restyle the "
+                 "specs with Cosmos (README option C), then re-run this stage")
+    py_snippet("cosmos_restyle_prep", pat, "cmd_rebuild()", env=env)
+    dr = load_mod("dr_prep")
+    from multiprocessing.pool import ThreadPool
+    from PIL import Image
+    src = json.load(open(cw / "processed_cosmos/vqa_train.json"))
+    droot = cw / "frames_dr_bundle"
+    droot.mkdir(parents=True, exist_ok=True)
+    paths = sorted({p for s in src for p in s["images"]})
+
+    def drp(p):
+        return str(droot / (hashlib.md5(p.encode()).hexdigest()[:16] + ".jpg"))
+
+    def work(p):
+        out = Path(drp(p))
+        if out.exists():
+            return 0
+        im = Image.open(p).convert("RGB")
+        dr.augment(im, dr._rng(p)).save(out, "JPEG", quality=92)
+        return 1
+
+    with ThreadPool(16) as pool:
+        made = sum(pool.map(work, paths))
+    na = nt = 0
+    for s in src:
+        imgs = []
+        for p in s["images"]:
+            nt += 1
+            if dr._rng("bundle:" + s["id"] + p).random() < 0.6:
+                imgs.append(drp(p)); na += 1
+            else:
+                imgs.append(p)
+        s["images"] = imgs
+    outd = cw / "processed_bundle"
+    outd.mkdir(parents=True, exist_ok=True)
+    json.dump(src, open(outd / "vqa_train.json", "w"))
+    print(f"[e2e] bundle train set: {made} DR variants, {na}/{nt} images use DR")
+    run([sys.executable, "-u", CODE / "run_qwen35_vqa.py", "train"],
+        env={"AICC26_QWEN35_QUANT": "bf16", "AICC26_DATA_DIR": outd,
+             "AICC26_QWEN35_ADAPTER": a.work / "adapters/vqa_lora_bundle"})
+
+
 def st_predict_bundle(a):
     ad = a.work / "adapters/vqa_lora_bundle"
     if not (ad / "adapter_model.safetensors").exists():
@@ -421,6 +491,7 @@ STAGES = [("prep_test", st_prep_test), ("prep_train", st_prep_train),
           ("train_base", st_train_base), ("predict_base", st_predict_base),
           ("predict_8bit", st_predict_8bit), ("compose_wsd2", st_compose_wsd2),
           ("train_ctx", st_train_ctx), ("predict_ctx", st_predict_ctx),
+          ("cosmos_prep", st_cosmos_prep), ("train_bundle", st_train_bundle),
           ("predict_bundle", st_predict_bundle),
           ("compose_vqa", st_compose_vqa), ("train_caption", st_train_caption),
           ("predict_caption", st_predict_caption), ("stitch", st_stitch)]
@@ -474,6 +545,8 @@ def main():
     want = None if a.stages == "all" else set(a.stages.split(","))
     for name, fn in STAGES:
         if want and name not in want:
+            continue
+        if name in ("cosmos_prep", "train_bundle") and not want:
             continue
         if name == "predict_bundle" and not a.with_bundle and not want:
             print("[e2e] predict_bundle: skipped (--no-bundle)")

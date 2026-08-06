@@ -4,8 +4,8 @@ End-to-end reproduction of our Track 2 submission.
 The pipeline retrains the VQA, context, and caption adapters from the SynWTS
 training set and regenerates both submission files from the raw public-test
 package — no precomputed predictions. The one exception is the bundle adapter:
-its training needs an external Cosmos restyle step (see the appendix), so the
-pipeline predicts with the shipped copy from `artifacts/adapters/`.
+its training needs an external Cosmos restyle step (Option C), so by default
+the pipeline predicts with the shipped copy from `artifacts/adapters/`.
 
 ## 1. Requirements
 
@@ -83,9 +83,35 @@ Both options reproduce our submitted best VQA by default: the `predict_bundle`
 stage — a standard bf16 prediction with the `vqa_lora_bundle` adapter — routes
 five question types through those probabilities, exactly as our best submission
 was composed. Prediction needs no Cosmos; only retraining that adapter from
-scratch does (appendix below), so under Option A the stage falls back to the
+scratch does (Option C), so under Option A the stage falls back to the
 shipped adapter and says so. Append `--no-bundle` to run the plain route
 without it.
+
+### Option C — also retrain the bundle adapter (advanced; external Cosmos step)
+
+`vqa_lora_bundle` was trained on Cosmos-restyled **synthetic** overhead
+keyframes plus photometric domain randomization. Reproducing it needs one step
+outside this image — restyling with
+[`nvidia/Cosmos-Transfer2.5-2B`](https://huggingface.co/nvidia/Cosmos-Transfer2.5-2B)
+(distilled edge variant; gated repo, separate install per its own README):
+
+```bash
+# 1. dump the 1,447 overhead train keyframes + per-frame restyle specs
+docker run --rm --gpus all -v "$PWD:/pkg" -v team24-hf:/root/.cache/huggingface \
+  team24-e2e --stages cosmos_prep
+
+# 2. (external) restyle work/cosmos/specs/*.json with Cosmos-Transfer2.5-2B,
+#    writing outputs to work/cosmos/restyled/   (~4 h on a 96 GB GPU)
+
+# 3. rebuild the frame tree, overlay domain randomization, retrain (~6 h)
+docker run --rm --gpus all -v "$PWD:/pkg" -v team24-hf:/root/.cache/huggingface \
+  team24-e2e --stages train_bundle
+
+# 4. redo the bundle prediction with the fresh adapter, then finish
+rm -rf work/probs/bundle_probs.json.shards work/.done/predict_bundle
+docker run --rm --gpus all --shm-size 8g \
+  -v "$PWD:/pkg" -v team24-hf:/root/.cache/huggingface team24-e2e
+```
 
 ## 4. Expected results
 
@@ -117,27 +143,6 @@ versions, so scores land within a small band of these values
 | `wsd.py` | transition mining + canonical-state Viterbi decoding |
 | `fact_stitch.py`, `fact_stitch3/4/5.py` | caption fact correction waves v2–v5 |
 | `cosmos_restyle_prep.py`, `dr_prep.py`, `*.sh` | optional bundle route + historical deploy pipelines |
-
-## Appendix — retraining the bundle adapter from scratch (Cosmos restyle)
-
-`vqa_lora_bundle` was trained on Cosmos-restyled **synthetic** frames. The
-shipped adapter reproduces our submission without any of this; the steps are
-documented for full from-scratch transparency (they ran on a 96 GB dev machine
-and the helper scripts still carry that machine's paths):
-
-1. `cosmos_restyle_prep.py dump` / `spec` — deterministically re-select the
-   1,447 overhead train keyframes, save raw frames + per-frame spec JSON
-   (edge control + a fixed CCTV realism prompt).
-2. Restyle the specs with **`nvidia/Cosmos-Transfer2.5-2B`** (distilled edge
-   variant; gated Hugging Face repo, separate install per its own README) —
-   ~4 h on a 96 GB GPU.
-3. `cosmos_restyle_prep.py rebuild` — redraw bboxes and re-crop locals from the
-   restyled globals, then remap `vqa_train.json` onto the restyled tree.
-4. Overlay photometric domain randomization (`dr_prep.py`, p = 0.6).
-5. Retrain the VQA LoRA on the resulting set (same `run_qwen35_vqa.py train`
-   as `train_base`, ~6 h) → `vqa_lora_bundle`.
-
-`cosmos_night.sh` is the historical script that chained steps 1–5.
 
 ## Note on BDD_PC_5K
 
