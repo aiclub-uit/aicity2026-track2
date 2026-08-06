@@ -322,7 +322,7 @@ def st_predict_bundle(a):
     ad = a.work / "adapters/vqa_lora_bundle"
     if not (ad / "adapter_model.safetensors").exists():
         src = PKG / "artifacts/adapters/vqa_lora_bundle"
-        if not (src / "adapter_model.safetensors").exists():
+        if not (src / "adapter_model.safetensors").exists() or not shipped_adapter_ok(src):
             sys.exit("bundle adapter not found in work/ or artifacts/ — retrain it via the "
                      "Cosmos route (README Option C), or restore artifacts/adapters/ (git LFS)")
         shutil.copytree(src, ad)
@@ -465,8 +465,6 @@ def st_stitch(a):
         cap = json.load(open(w / "v5/subtask1_captioning.json"))
         need = {(s_["scenario"], str(s_["phase_label"]))
                 for s_ in json.load(open(a.work / "test_prep/caption/processed/caption_val.json"))}
-        have = {(scn, str((e.get("labels") or [""])[0]))
-                for scn, es in cap.items() for e in es}
         pairs = [(scn, str((e.get("labels") or [""])[0]))
                  for scn, es in cap.items() for e in es]
         have = set(pairs)
@@ -497,18 +495,30 @@ STAGES = [("prep_test", st_prep_test), ("prep_train", st_prep_train),
           ("predict_caption", st_predict_caption), ("stitch", st_stitch)]
 
 
+def shipped_adapter_ok(d: Path) -> bool:
+    """False for a missing file AND for an unsmudged git-LFS pointer (~134 bytes)."""
+    f = d / "adapter_model.safetensors"
+    if not f.exists():
+        return False
+    if f.stat().st_size < 1_000_000:
+        sys.exit(f"{f} is a git-LFS pointer, not the real weights — "
+                 "run `git lfs install && git lfs pull` in the package first")
+    return True
+
+
 def seed_shipped_adapters(a):
     src = PKG / "artifacts/adapters"
     for stage, name in [("train_base", "vqa_lora"), ("train_ctx", "vqa_lora_ctx"),
                         ("train_caption", "caption_dpo_lora")]:
         s, d = src / name, a.work / "adapters" / name
-        if not (s / "adapter_model.safetensors").exists():
+        if not shipped_adapter_ok(s):
             sys.exit(f"--skip-training: shipped adapter missing: {s}")
         if not d.exists():
             shutil.copytree(s, d)
         (a.work / ".done" / stage).touch()
     b = src / "vqa_lora_bundle"
-    if (b / "adapter_model.safetensors").exists() and not (a.work / "adapters/vqa_lora_bundle").exists():
+    if (b / "adapter_model.safetensors").exists() and shipped_adapter_ok(b) \
+            and not (a.work / "adapters/vqa_lora_bundle").exists():
         shutil.copytree(b, a.work / "adapters/vqa_lora_bundle")
     print("[e2e] --skip-training: shipped adapters seeded, train stages marked done")
 
@@ -536,12 +546,12 @@ def main():
     done = a.work / ".done"; done.mkdir(parents=True, exist_ok=True)
     for sub in ("probs", "vqa", "adapters", "caption"):
         (a.work / sub).mkdir(parents=True, exist_ok=True)
-    if a.skip_training:
-        seed_shipped_adapters(a)
     if a.list:
         for n, _ in STAGES:
             print(f"  {'✔' if (done / n).exists() else '·'} {n}")
         return
+    if a.skip_training:
+        seed_shipped_adapters(a)
     want = None if a.stages == "all" else set(a.stages.split(","))
     for name, fn in STAGES:
         if want and name not in want:
