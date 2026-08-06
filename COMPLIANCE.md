@@ -42,9 +42,11 @@ data to `submissions/subtask2_vqa.json` + `submissions/subtask1_captioning.json`
 
 Included in the repo but **not part of the submitted system's output path**:
 
-- `harmonize_attrs.py` — its cross-phase majority-vote rewrite is never invoked
-  by the pipeline; the fact-stitch modules import only its `_score` scoring
-  helper. (Kept in `code/` because of that import.)
+- `harmonize_attrs.py` (cross-phase attribute harmonization) — an experiment
+  that was never part of the submitted system; the file has been removed from
+  the package. Its only references are inside the fact-stitch `cmd_val`
+  validation helpers, which the pipeline never invokes (they also require the
+  unshipped local `eval/` module).
 - The MBR best-of-N prediction path (`QWEN35_PRED_NCAND > 1`) — the pipeline
   uses greedy decoding (default).
 - The Cosmos-restyle "bundle" route (`--with-bundle`, `cosmos_restyle_prep.py`,

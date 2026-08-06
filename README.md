@@ -96,7 +96,6 @@ versions, so scores land within a small band of these values
 | `ctx_builder.py` | temporal-context + bbox-evidence training/eval data |
 | `wsd.py` | transition mining + canonical-state Viterbi decoding |
 | `fact_stitch.py`, `fact_stitch3/4/5.py` | caption fact correction waves v2–v5 |
-| `harmonize_attrs.py` | `_score` helper imported by fact-stitch; its rewrite routine is unused (see COMPLIANCE.md) |
 | `cosmos_restyle_prep.py`, `dr_prep.py`, `*.sh` | optional bundle route + historical deploy pipelines |
 
 Data-usage and rules compliance: see [COMPLIANCE.md](COMPLIANCE.md).
