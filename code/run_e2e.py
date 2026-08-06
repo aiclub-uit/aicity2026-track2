@@ -228,10 +228,21 @@ def st_train_ctx(a):
                    str(a.work / "train_prep/vqa/processed/vqa_train.json"),
                    str(d / "vqa_train.json")),
                raw=ctx_patches(a))
+    try:
+        mb = int(subprocess.run(["nvidia-smi", "--query-gpu=memory.total",
+                                 "--format=csv,noheader,nounits"],
+                                capture_output=True, text=True).stdout.split("\n")[0])
+    except Exception:
+        mb = 0
+    quant = "8bit" if mb >= 40_000 else "4bit"
+    if quant == "4bit":
+        # 8-bit (the original setting) OOMs on the 5-image ctx samples within 32 GB;
+        # 4-bit peaks ~28.8 GB on the same samples
+        print(f"[e2e] train_ctx: {mb} MiB VRAM -> 4-bit frozen base")
     cmd = [sys.executable, "-u", CODE / "run_qwen35_vqa.py", "train"]
     if a.train_limit:
         cmd += ["--limit", a.train_limit]
-    run(cmd, env={"AICC26_QWEN35_QUANT": "8bit", "AICC26_DATA_DIR": d,
+    run(cmd, env={"AICC26_QWEN35_QUANT": quant, "AICC26_DATA_DIR": d,
                   "AICC26_QWEN35_ADAPTER": a.work / "adapters/vqa_lora_ctx"})
 
 
