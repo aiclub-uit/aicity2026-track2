@@ -15,6 +15,21 @@ from pathlib import Path
 CODE = Path(__file__).resolve().parent
 PKG = CODE.parent
 SPATIAL = "orientation,position_ped,position_veh"
+QWEN_REV = "c202236235762e1c871ad0ccb60c8ee5ba337b9a"
+_QWEN = None
+
+
+def qwen_model() -> str:
+    """Local snapshot of the pinned Qwen revision (falls back to the hub name)."""
+    global _QWEN
+    if _QWEN is None:
+        try:
+            from huggingface_hub import snapshot_download
+            _QWEN = snapshot_download("Qwen/Qwen3.5-9B", revision=QWEN_REV)
+        except Exception as e:
+            print(f"[e2e] could not pin Qwen revision ({e}) -> using latest from the hub")
+            _QWEN = "Qwen/Qwen3.5-9B"
+    return _QWEN
 
 
 def load_mod(name: str, attrs: dict | None = None):
@@ -104,6 +119,7 @@ def sharded_predict(samples_json, out_probs, out_answers, adapter, quant,
                  f"({json.load(open(pv))}) — delete the folder to re-predict")
     json.dump(prov, open(pv, "w"))
     env = {"AICC26_QWEN35_QUANT": quant, "AICC26_QWEN35_ADAPTER": adapter,
+           "AICC26_QWEN35_MODEL": qwen_model(),
            "QWEN35_BATCH": batch, **(env_extra or {})}
     shards = [(i, data[i:i + shard]) for i in range(0, len(data), shard)]
     print(f"[e2e] predict {len(data):,} samples, {len(shards)} shards, quant={quant}", flush=True)
@@ -186,7 +202,7 @@ def st_train_base(a):
     cmd = [sys.executable, "-u", CODE / "run_qwen35_vqa.py", "train"]
     if a.train_limit:
         cmd += ["--limit", a.train_limit]
-    run(cmd, env={"AICC26_QWEN35_QUANT": "bf16",
+    run(cmd, env={"AICC26_QWEN35_QUANT": "bf16", "AICC26_QWEN35_MODEL": qwen_model(),
                   "AICC26_DATA_DIR": a.work / "train_prep/vqa/processed",
                   "AICC26_QWEN35_ADAPTER": a.work / "adapters/vqa_lora"})
 
@@ -242,7 +258,8 @@ def st_train_ctx(a):
     cmd = [sys.executable, "-u", CODE / "run_qwen35_vqa.py", "train"]
     if a.train_limit:
         cmd += ["--limit", a.train_limit]
-    run(cmd, env={"AICC26_QWEN35_QUANT": quant, "AICC26_DATA_DIR": d,
+    run(cmd, env={"AICC26_QWEN35_QUANT": quant, "AICC26_QWEN35_MODEL": qwen_model(),
+                  "AICC26_DATA_DIR": d,
                   "AICC26_QWEN35_ADAPTER": a.work / "adapters/vqa_lora_ctx"})
 
 
@@ -325,7 +342,8 @@ def st_train_bundle(a):
     json.dump(src, open(outd / "vqa_train.json", "w"))
     print(f"[e2e] bundle train set: {made} DR variants, {na}/{nt} images use DR")
     run([sys.executable, "-u", CODE / "run_qwen35_vqa.py", "train"],
-        env={"AICC26_QWEN35_QUANT": "bf16", "AICC26_DATA_DIR": outd,
+        env={"AICC26_QWEN35_QUANT": "bf16", "AICC26_QWEN35_MODEL": qwen_model(),
+             "AICC26_DATA_DIR": outd,
              "AICC26_QWEN35_ADAPTER": a.work / "adapters/vqa_lora_bundle"})
 
 
@@ -416,15 +434,15 @@ def st_train_caption(a):
            "AICC26_DPO_PAIRS": a.work / "caption/dpo_pairs.json"}
     data = a.work / "train_prep/caption/processed"
     lim = int(a.caption_limit or 0)
-    py_snippet("run_qwen35_caption", {"DATA": data}, f"cmd_train({lim or None})", env=env)
-    py_snippet("run_qwen35_caption", {"DATA": data}, f"cmd_build_dpo({lim})", env=env)
-    py_snippet("run_qwen35_caption", {"DATA": data}, "cmd_train_dpo()", env=env)
+    py_snippet("run_qwen35_caption", {"DATA": data, "MODEL_ID": qwen_model()}, f"cmd_train({lim or None})", env=env)
+    py_snippet("run_qwen35_caption", {"DATA": data, "MODEL_ID": qwen_model()}, f"cmd_build_dpo({lim})", env=env)
+    py_snippet("run_qwen35_caption", {"DATA": data, "MODEL_ID": qwen_model()}, "cmd_train_dpo()", env=env)
 
 
 def st_predict_caption(a):
     (a.work / "caption").mkdir(parents=True, exist_ok=True)
     test_meta = a.work / "test_prep/caption/processed/caption_val.json"
-    py_snippet("run_qwen35_caption", {},
+    py_snippet("run_qwen35_caption", {"MODEL_ID": qwen_model()},
                "cmd_predict_submission(%r, %r)" % (
                    str(test_meta), str(a.work / "caption/caption_test_preds.json")),
                env={"AICC26_QWEN35_QUANT": a.quant_caption,
