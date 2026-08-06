@@ -63,11 +63,12 @@ docker run --rm --gpus all --shm-size 8g \
   team24-e2e --skip-training
 ```
 
-### Option B — full end-to-end retrain
+### Option B — retrain the main adapters (VQA, context, caption)
 
-Also retrains the VQA, context, and caption adapters from SynWTS first
-(~3 GPU-days total). The bundle adapter still comes from `artifacts/`
-unless you run Option C.
+Retrains the three main adapters from SynWTS before predicting
+(~3 GPU-days total). Not fully from scratch: the bundle adapter still comes
+from `artifacts/` — retraining that one as well requires the external Cosmos
+step in Option C.
 
 ```bash
 docker run --rm --gpus all --shm-size 8g \
