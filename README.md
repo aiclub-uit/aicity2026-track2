@@ -51,25 +51,28 @@ package do not resolve in the container) — bind-mount it instead, e.g.
 docker build -t team24-e2e .
 ```
 
-### Option A — full end-to-end (retrains everything)
+### Option A — reproduce with the shipped adapters (recommended)
 
-Retrains all LoRA adapters from SynWTS, then predicts. ~3 GPU-days total.
-
-```bash
-docker run --rm --gpus all --shm-size 8g \
-  -v "$PWD:/pkg" -v team24-hf:/root/.cache/huggingface \
-  team24-e2e
-```
-
-### Option B — use the artifacts
-
-Uses our deployed LoRA adapters from `artifacts/adapters/` (git LFS) and goes
-straight to prediction.
+One command from raw data to both submission files. Uses our trained LoRA
+adapters from `artifacts/adapters/` (git LFS); regenerates everything else —
+preprocessing, all predictions, composition, captions. ~1 GPU-day.
 
 ```bash
 docker run --rm --gpus all --shm-size 8g \
   -v "$PWD:/pkg" -v team24-hf:/root/.cache/huggingface \
   team24-e2e --skip-training
+```
+
+### Option B — full end-to-end retrain
+
+Also retrains the VQA, context, and caption adapters from SynWTS first
+(~3 GPU-days total). The bundle adapter still comes from `artifacts/`
+unless you run Option C.
+
+```bash
+docker run --rm --gpus all --shm-size 8g \
+  -v "$PWD:/pkg" -v team24-hf:/root/.cache/huggingface \
+  team24-e2e
 ```
 
 Both options write the final outputs `submissions/subtask2_vqa.json` and
@@ -83,11 +86,11 @@ Both options reproduce our submitted best VQA by default: the `predict_bundle`
 stage — a standard bf16 prediction with the `vqa_lora_bundle` adapter — routes
 five question types through those probabilities, exactly as our best submission
 was composed. Prediction needs no Cosmos; only retraining that adapter from
-scratch does (Option C), so under Option A the stage falls back to the
+scratch does (Option C), so under Option B the stage falls back to the
 shipped adapter and says so. Append `--no-bundle` to run the plain route
 without it.
 
-### Option C — also retrain the bundle adapter (advanced; external Cosmos step)
+### Option C — advanced: also retrain the bundle adapter (external Cosmos step)
 
 `vqa_lora_bundle` was trained on Cosmos-restyled **synthetic** overhead
 keyframes plus photometric domain randomization. Reproducing it needs one step
@@ -127,7 +130,7 @@ versions, so scores land within a small band of these values
 | Model | Source | Revision |
 |---|---|---|
 | Qwen/Qwen3.5-9B (base for all adapters) | Hugging Face, public | `c202236235762e1c871ad0ccb60c8ee5ba337b9a` |
-| nvidia/Cosmos-Transfer2.5-2B (restyles synthetic training frames only) | Hugging Face, public (gated) | distilled edge variant |
+| nvidia/Cosmos-Transfer2.5-2B (restyles synthetic training frames only) | Hugging Face, public (gated) | `ce8440327c632d8313c3bde69db13b627ba5cae1` (distilled edge) |
 | LoRA adapters (ours) | `artifacts/adapters/` (git LFS) | trained per this repo |
 
 ## 6. Code map
@@ -143,6 +146,8 @@ versions, so scores land within a small band of these values
 | `wsd.py` | transition mining + canonical-state Viterbi decoding |
 | `fact_stitch.py`, `fact_stitch3/4/5.py` | caption fact correction waves v2–v5 |
 | `cosmos_restyle_prep.py`, `dr_prep.py`, `*.sh` | optional bundle route + historical deploy pipelines |
+
+Data-usage and rules compliance: see [COMPLIANCE.md](COMPLIANCE.md).
 
 ## Note on BDD_PC_5K
 

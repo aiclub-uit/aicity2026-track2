@@ -324,10 +324,10 @@ def st_predict_bundle(a):
         src = PKG / "artifacts/adapters/vqa_lora_bundle"
         if not (src / "adapter_model.safetensors").exists():
             sys.exit("bundle adapter not found in work/ or artifacts/ — retrain it via the "
-                     "Cosmos appendix in README.md, or restore artifacts/adapters/ (git LFS)")
+                     "Cosmos route (README Option C), or restore artifacts/adapters/ (git LFS)")
         shutil.copytree(src, ad)
         print("[e2e] bundle adapter: using shipped artifact "
-              "(from-scratch retrain requires Cosmos — see README appendix)")
+              "(from-scratch retrain requires Cosmos — see README Option C)")
     sharded_predict(a.work / "test_prep/vqa/processed/vqa_val.json",
                     a.work / "probs/bundle_probs.json",
                     a.work / "vqa/bundle_answers_unused.json",
