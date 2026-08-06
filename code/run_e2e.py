@@ -254,7 +254,7 @@ def cosmos_paths(a):
     pat = {"OUT": str(cw), "RAW": str(cw / "raw"), "META": str(cw / "meta.jsonl"),
            "SPECS": str(cw / "specs"), "RESTYLED": str(cw / "restyled"),
            "PROC": str(a.work / "train_prep/vqa/processed"),
-           "DEST": str(cw / "processed_cosmos")}
+           "DEST": str(a.work / "train_prep/vqa/processed_cosmos")}
     env = {"AICC26_DATA_ROOT": a.data / "synwts/data",
            "AICC26_PROJECT_ROOT": a.work / "train_prep",
            "AICC26_WORK_ROOT_QWEN7B": a.work / "train_prep/vqa"}
@@ -281,7 +281,7 @@ def st_train_bundle(a):
     dr = load_mod("dr_prep")
     from multiprocessing.pool import ThreadPool
     from PIL import Image
-    src = json.load(open(cw / "processed_cosmos/vqa_train.json"))
+    src = json.load(open(a.work / "train_prep/vqa/processed_cosmos/vqa_train.json"))
     droot = cw / "frames_dr_bundle"
     droot.mkdir(parents=True, exist_ok=True)
     paths = sorted({p for s in src for p in s["images"]})
