@@ -319,10 +319,10 @@ def st_compose_vqa(a):
     final = a.work / "vqa/answers_ctx.json"
     bundle = a.work / "probs/bundle_probs.json"
     if bundle.exists() and not a.with_bundle:
-        print("[e2e] bundle probs present but --with-bundle not set -> ignored")
+        print("[e2e] bundle probs present but --no-bundle set -> ignored")
     if a.with_bundle and not bundle.exists():
-        sys.exit(f"--with-bundle set but {bundle} not found — run the predict_bundle stage first")
-    if a.with_bundle and bundle.exists():  # optional reality-transfer route
+        sys.exit(f"bundle route needs {bundle} — run the predict_bundle stage first")
+    if a.with_bundle and bundle.exists():  # reality-transfer route (submitted best)
         SP = set(SPATIAL.split(",")); VIT = SP | {"action"}
         TGT = {"direction", "speed", "attention", "distance", "action"}
         samples = json.load(open(T))
@@ -506,8 +506,8 @@ def main():
     ap.add_argument("--train-limit", type=int, default=0, help="smoke: cap train samples")
     ap.add_argument("--caption-limit", type=int, default=0, help="smoke: cap caption samples")
     ap.add_argument("--quant-caption", default="bf16", choices=["bf16", "8bit", "4bit"])
-    ap.add_argument("--with-bundle", action="store_true",
-                    help="route reality-transfer probs (requires work/probs/bundle_probs.json)")
+    ap.add_argument("--no-bundle", action="store_true",
+                    help="skip the bundle (reality-transfer) route; the submitted best VQA uses it")
     ap.add_argument("--skip-training", action="store_true",
                     help="use the shipped adapters in artifacts/ instead of retraining")
     ap.add_argument("--predict-batch", type=int, default=0,
@@ -515,6 +515,7 @@ def main():
                          "(bf16: 2, 8-bit: 4) — raise on larger GPUs, must divide 2000")
     ap.add_argument("--list", action="store_true")
     a = ap.parse_args()
+    a.with_bundle = not a.no_bundle  # bundle route (submitted best) is the default
     done = a.work / ".done"; done.mkdir(parents=True, exist_ok=True)
     for sub in ("probs", "vqa", "adapters", "caption"):
         (a.work / sub).mkdir(parents=True, exist_ok=True)
@@ -529,7 +530,7 @@ def main():
         if want and name not in want:
             continue
         if name == "predict_bundle" and not a.with_bundle and not want:
-            print("[e2e] predict_bundle: skipped (--with-bundle not set)")
+            print("[e2e] predict_bundle: skipped (--no-bundle)")
             continue
         if not want and (done / name).exists():
             print(f"[e2e] {name}: done, skip")

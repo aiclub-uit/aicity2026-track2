@@ -54,8 +54,9 @@ Included in the repo but **not part of the submitted system's output path**:
 
 ## The bundle (Cosmos) route — part of the submitted best VQA
 
-Our submitted best VQA used the **bundle route** (`--with-bundle`): five
-question types are answered from the `vqa_lora_bundle` adapter's probabilities.
+Our submitted best VQA used the **bundle route**, which is the pipeline's
+default (`--no-bundle` disables it): five question types are answered from the
+`vqa_lora_bundle` adapter's probabilities via the `predict_bundle` stage.
 Compliance facts about that adapter:
 
 - It was trained **only on SynWTS-derived data**: the synthetic overhead train

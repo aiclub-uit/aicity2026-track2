@@ -77,24 +77,32 @@ the run is resumable (append `--list` for stage status).
 Batch sizes default to the 32 GB VRAM minimum. On larger GPUs (≥ 48 GB) append
 `--predict-batch 8` (any divisor of 2000) to speed up the prediction stages.
 
-**Reproducing our best submission**: append `--with-bundle` (works with both
-options). This adds the `predict_bundle` stage — a standard bf16 prediction with
-the `vqa_lora_bundle` adapter — and routes five question types through those
-probabilities, which is exactly how our submitted best VQA was composed.
-Prediction needs no Cosmos; only retraining that adapter from scratch does
-(see the appendix below) — with Option A the stage falls back to the shipped
-adapter and says so.
+Both options reproduce our submitted best VQA by default: the `predict_bundle`
+stage — a standard bf16 prediction with the `vqa_lora_bundle` adapter — routes
+five question types through those probabilities, exactly as our best submission
+was composed. Prediction needs no Cosmos; only retraining that adapter from
+scratch does (appendix below), so under Option A the stage falls back to the
+shipped adapter and says so. Append `--no-bundle` to run the plain route
+without it.
 
 ## 4. Expected results
 
-Target scores on the public test set: **VQA accuracy ≈ 84.7** (with
-`--with-bundle`, our submitted composition; the default route lands ≈ 0.05
-lower), **caption S1 ≈ 29.9–30.0**.
+Target scores on the public test set: **VQA accuracy ≈ 84.7** (default run =
+our submitted composition; `--no-bundle` lands ≈ 0.05 lower),
+**caption S1 ≈ 29.9–30.0**.
 GPU LoRA training and sampling are not bit-exact across hardware/library
 versions, so scores land within a small band of these values
 (±0.1–0.2 accuracy / S1 in our re-runs).
 
-## 5. Code map
+## 5. Models
+
+| Model | Source | Revision |
+|---|---|---|
+| Qwen/Qwen3.5-9B (base for all adapters) | Hugging Face, public | `c202236235762e1c871ad0ccb60c8ee5ba337b9a` |
+| nvidia/Cosmos-Transfer2.5-2B (restyles synthetic training frames only) | Hugging Face, public (gated) | distilled edge variant |
+| LoRA adapters (ours) | `artifacts/adapters/` (git LFS) | trained per this repo |
+
+## 6. Code map
 
 | File | Role |
 |---|---|
