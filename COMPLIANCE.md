@@ -67,6 +67,16 @@ Our submitted best VQA routes five question types through the
   from scratch (the Cosmos restyle itself runs outside this image because the
   model is a gated repo with its own environment).
 
+## Cosmos guardrails note
+
+The historical restyle run (`cosmos_night.sh`) passed Cosmos's
+`--disable-guardrails` inference flag. That step processed only our own
+synthetic, rendered frames — no real-world imagery and no real persons appear
+in them — and its outputs were used solely as internal training data for the
+bundle adapter, which we consider the use-case-appropriate safeguard the
+NVIDIA Open Model License asks for. The Option C reproduction instructions do
+not use this flag: reproducers run Cosmos with its default guardrails.
+
 ## BDD_PC_5K
 
 See the note in `README.md`: the submission answers every entry in the
