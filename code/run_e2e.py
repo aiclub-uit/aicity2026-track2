@@ -229,9 +229,10 @@ def st_train_base(a):
 
 
 def st_predict_base(a):
+    # bf16 predict spikes past 31 GB at batch 4 on long option groups — batch 2 fits 32 GB cards
     sharded_predict(a.work / "test_prep/vqa/processed/vqa_val.json",
                     a.work / "probs/base_bf16_probs.json", a.work / "vqa/base_answers.json",
-                    a.work / "adapters/vqa_lora", "bf16")
+                    a.work / "adapters/vqa_lora", "bf16", batch=2)
 
 
 def st_predict_8bit(a):
