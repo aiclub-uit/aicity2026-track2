@@ -1,9 +1,11 @@
 # Team 24 (UIT–Kitchen) — AI City Challenge 2026 Track 2 Reproduction
 
 End-to-end reproduction of our Track 2 submission.
-The pipeline retrains every model from the SynWTS training set and regenerates
-both submission files from the raw public-test package — no pretrained adapters,
-no precomputed predictions.
+The pipeline retrains the VQA, context, and caption adapters from the SynWTS
+training set and regenerates both submission files from the raw public-test
+package — no precomputed predictions. The one exception is the bundle adapter:
+its training needs an external Cosmos restyle step (see the appendix), so the
+pipeline predicts with the shipped copy from `artifacts/adapters/`.
 
 ## 1. Requirements
 
