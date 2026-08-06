@@ -127,7 +127,8 @@ def sharded_predict(samples_json, out_probs, out_answers, adapter, quant,
     workdir = Path(str(out_probs) + ".shards")
     workdir.mkdir(parents=True, exist_ok=True)
     data = json.load(open(samples_json))
-    assert shard % batch == 0
+    if shard % batch:
+        sys.exit(f"--predict-batch {batch} must divide the shard size ({shard})")
     aw = Path(adapter) / "adapter_model.safetensors"
     prov = {"adapter": str(adapter), "quant": quant, "qtypes": qtypes,
             "batch": batch, "shard": shard, "n": len(data),
@@ -232,13 +233,13 @@ def st_predict_base(a):
     # bf16 predict spikes past 31 GB at batch 4 on long option groups — batch 2 fits 32 GB cards
     sharded_predict(a.work / "test_prep/vqa/processed/vqa_val.json",
                     a.work / "probs/base_bf16_probs.json", a.work / "vqa/base_answers.json",
-                    a.work / "adapters/vqa_lora", "bf16", batch=2)
+                    a.work / "adapters/vqa_lora", "bf16", batch=a.predict_batch or 2)
 
 
 def st_predict_8bit(a):
     sharded_predict(a.work / "test_prep/vqa/processed/vqa_val.json",
                     a.work / "probs/base_8bit_probs.json", a.work / "vqa/answers_8bit_unused.json",
-                    a.work / "adapters/vqa_lora", "8bit")
+                    a.work / "adapters/vqa_lora", "8bit", batch=a.predict_batch or 4)
 
 
 def st_compose_wsd2(a):
@@ -285,7 +286,8 @@ def st_predict_ctx(a):
                raw=ctx_patches(a))
     sharded_predict(d / "vqa_test_ctx.json", a.work / "probs/ctx_probs.json",
                     a.work / "vqa/ctx_answers_unused.json",
-                    a.work / "adapters/vqa_lora_ctx", "8bit", qtypes=SPATIAL)
+                    a.work / "adapters/vqa_lora_ctx", "8bit", qtypes=SPATIAL,
+                    batch=a.predict_batch or 4)
 
 
 def st_compose_vqa(a):
@@ -485,6 +487,9 @@ def main():
                     help="route reality-transfer probs (requires work/probs/bundle_probs.json)")
     ap.add_argument("--skip-training", action="store_true",
                     help="use the shipped adapters in artifacts/ instead of retraining")
+    ap.add_argument("--predict-batch", type=int, default=0,
+                    help="prediction batch size; 0 = defaults sized for 32 GB VRAM "
+                         "(bf16: 2, 8-bit: 4) — raise on larger GPUs, must divide 2000")
     ap.add_argument("--list", action="store_true")
     a = ap.parse_args()
     done = a.work / ".done"; done.mkdir(parents=True, exist_ok=True)

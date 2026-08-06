@@ -49,7 +49,7 @@ package do not resolve in the container) — bind-mount it instead, e.g.
 docker build -t team24-e2e .
 ```
 
-### Option A — full end-to-end (retrains everything, no artifacts needed)
+### Option A — full end-to-end (retrains everything)
 
 Retrains all LoRA adapters from SynWTS, then predicts. ~3 GPU-days total.
 
@@ -59,7 +59,7 @@ docker run --rm --gpus all --shm-size 8g \
   team24-e2e
 ```
 
-### Option B — use the shipped artifacts (skip training, ~1 GPU-day)
+### Option B — use the artifacts
 
 Uses our deployed LoRA adapters from `artifacts/adapters/` (git LFS) and goes
 straight to prediction.
@@ -73,6 +73,9 @@ docker run --rm --gpus all --shm-size 8g \
 Both options write the final outputs `submissions/subtask2_vqa.json` and
 `submissions/subtask1_captioning.json`. Intermediates stay under `work/`;
 the run is resumable (append `--list` for stage status).
+
+Batch sizes default to the 32 GB VRAM minimum. On larger GPUs (≥ 48 GB) append
+`--predict-batch 8` (any divisor of 2000) to speed up the prediction stages.
 
 ## 4. Expected results
 
