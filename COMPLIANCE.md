@@ -31,6 +31,7 @@ and ablations used the SynWTS val split.
 | Model | Source | Revision |
 |---|---|---|
 | Qwen/Qwen3.5-9B (base for all adapters) | Hugging Face, public | `c202236235762e1c871ad0ccb60c8ee5ba337b9a` |
+| nvidia/Cosmos-Transfer2.5-2B (restyles synthetic training frames only) | Hugging Face, public (gated) | distilled edge variant |
 | LoRA adapters (ours) | `artifacts/adapters/` (git LFS) | trained per this repo |
 
 Python dependencies are pinned in the `Dockerfile`.
@@ -49,10 +50,23 @@ Included in the repo but **not part of the submitted system's output path**:
   unshipped local `eval/` module).
 - The MBR best-of-N prediction path (`QWEN35_PRED_NCAND > 1`) — the pipeline
   uses greedy decoding (default).
-- The Cosmos-restyle "bundle" route (`--with-bundle`, `cosmos_restyle_prep.py`,
-  `dr_prep.py`) — off by default; the default pipeline reproduces the
-  submitted scores without it.
 - `*.sh` scripts — historical deploy pipelines kept for reference.
+
+## The bundle (Cosmos) route — part of the submitted best VQA
+
+Our submitted best VQA used the **bundle route** (`--with-bundle`): five
+question types are answered from the `vqa_lora_bundle` adapter's probabilities.
+Compliance facts about that adapter:
+
+- It was trained **only on SynWTS-derived data**: the synthetic overhead train
+  keyframes were restyled with `nvidia/Cosmos-Transfer2.5-2B` (a public,
+  general-purpose model not trained on WTS) plus photometric domain
+  randomization. Restyled synthetic data is still synthetic-derived — no
+  real-world WTS/BDD content enters training.
+- Prediction with it is standard inference on the official test frames
+  (`predict_bundle` stage); no Cosmos is involved at test time.
+- The adapter is shipped in `artifacts/adapters/`; retraining it from scratch
+  is documented in the README appendix.
 
 ## BDD_PC_5K
 

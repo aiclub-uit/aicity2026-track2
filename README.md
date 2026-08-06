@@ -77,9 +77,19 @@ the run is resumable (append `--list` for stage status).
 Batch sizes default to the 32 GB VRAM minimum. On larger GPUs (≥ 48 GB) append
 `--predict-batch 8` (any divisor of 2000) to speed up the prediction stages.
 
+**Reproducing our best submission**: append `--with-bundle` (works with both
+options). This adds the `predict_bundle` stage — a standard bf16 prediction with
+the `vqa_lora_bundle` adapter — and routes five question types through those
+probabilities, which is exactly how our submitted best VQA was composed.
+Prediction needs no Cosmos; only retraining that adapter from scratch does
+(see the appendix below) — with Option A the stage falls back to the shipped
+adapter and says so.
+
 ## 4. Expected results
 
-Target scores on the public test set: **VQA accuracy ≈ 84.7**, **caption S1 ≈ 29.9–30.0**.
+Target scores on the public test set: **VQA accuracy ≈ 84.7** (with
+`--with-bundle`, our submitted composition; the default route lands ≈ 0.05
+lower), **caption S1 ≈ 29.9–30.0**.
 GPU LoRA training and sampling are not bit-exact across hardware/library
 versions, so scores land within a small band of these values
 (±0.1–0.2 accuracy / S1 in our re-runs).
@@ -99,6 +109,27 @@ versions, so scores land within a small band of these values
 | `cosmos_restyle_prep.py`, `dr_prep.py`, `*.sh` | optional bundle route + historical deploy pipelines |
 
 Data-usage and rules compliance: see [COMPLIANCE.md](COMPLIANCE.md).
+
+## Appendix — retraining the bundle adapter from scratch (Cosmos restyle)
+
+`vqa_lora_bundle` was trained on Cosmos-restyled **synthetic** frames. The
+shipped adapter reproduces our submission without any of this; the steps are
+documented for full from-scratch transparency (they ran on a 96 GB dev machine
+and the helper scripts still carry that machine's paths):
+
+1. `cosmos_restyle_prep.py dump` / `spec` — deterministically re-select the
+   1,447 overhead train keyframes, save raw frames + per-frame spec JSON
+   (edge control + a fixed CCTV realism prompt).
+2. Restyle the specs with **`nvidia/Cosmos-Transfer2.5-2B`** (distilled edge
+   variant; gated Hugging Face repo, separate install per its own README) —
+   ~4 h on a 96 GB GPU.
+3. `cosmos_restyle_prep.py rebuild` — redraw bboxes and re-crop locals from the
+   restyled globals, then remap `vqa_train.json` onto the restyled tree.
+4. Overlay photometric domain randomization (`dr_prep.py`, p = 0.6).
+5. Retrain the VQA LoRA on the resulting set (same `run_qwen35_vqa.py train`
+   as `train_base`, ~6 h) → `vqa_lora_bundle`.
+
+`cosmos_night.sh` is the historical script that chained steps 1–5.
 
 ## Note on BDD_PC_5K
 

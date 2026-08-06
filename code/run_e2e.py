@@ -290,6 +290,26 @@ def st_predict_ctx(a):
                     batch=a.predict_batch or 4)
 
 
+def st_predict_bundle(a):
+    """Bundle (reality-transfer) route: standard bf16 predict of the full test with the
+    vqa_lora_bundle adapter. Only the TRAINING of that adapter needs Cosmos (README
+    appendix); prediction is plain inference, so this stage runs from the shipped
+    artifact when work/ has no freshly trained copy."""
+    ad = a.work / "adapters/vqa_lora_bundle"
+    if not (ad / "adapter_model.safetensors").exists():
+        src = PKG / "artifacts/adapters/vqa_lora_bundle"
+        if not (src / "adapter_model.safetensors").exists():
+            sys.exit("bundle adapter not found in work/ or artifacts/ — retrain it via the "
+                     "Cosmos appendix in README.md, or restore artifacts/adapters/ (git LFS)")
+        shutil.copytree(src, ad)
+        print("[e2e] bundle adapter: using shipped artifact "
+              "(from-scratch retrain requires Cosmos — see README appendix)")
+    sharded_predict(a.work / "test_prep/vqa/processed/vqa_val.json",
+                    a.work / "probs/bundle_probs.json",
+                    a.work / "vqa/bundle_answers_unused.json",
+                    ad, "bf16", batch=a.predict_batch or 2)
+
+
 def st_compose_vqa(a):
     T = str(a.work / "test_prep/vqa/processed/vqa_val.json")
     wsd = load_mod("wsd", {"WORK": a.work / "probs"})
@@ -301,8 +321,7 @@ def st_compose_vqa(a):
     if bundle.exists() and not a.with_bundle:
         print("[e2e] bundle probs present but --with-bundle not set -> ignored")
     if a.with_bundle and not bundle.exists():
-        sys.exit(f"--with-bundle set but {bundle} not found (produce it with "
-                 "code/cosmos_restyle_prep.py + dr_prep.py + cosmos_night.sh)")
+        sys.exit(f"--with-bundle set but {bundle} not found — run the predict_bundle stage first")
     if a.with_bundle and bundle.exists():  # optional reality-transfer route
         SP = set(SPATIAL.split(",")); VIT = SP | {"action"}
         TGT = {"direction", "speed", "attention", "distance", "action"}
@@ -454,6 +473,7 @@ STAGES = [("prep_test", st_prep_test), ("prep_train", st_prep_train),
           ("train_base", st_train_base), ("predict_base", st_predict_base),
           ("predict_8bit", st_predict_8bit), ("compose_wsd2", st_compose_wsd2),
           ("train_ctx", st_train_ctx), ("predict_ctx", st_predict_ctx),
+          ("predict_bundle", st_predict_bundle),
           ("compose_vqa", st_compose_vqa), ("train_caption", st_train_caption),
           ("predict_caption", st_predict_caption), ("stitch", st_stitch)]
 
@@ -470,6 +490,9 @@ def seed_shipped_adapters(a):
         if not d.exists():
             shutil.copytree(s, d)
         (a.work / ".done" / stage).touch()
+    b = src / "vqa_lora_bundle"  # no train stage of its own; used by predict_bundle
+    if (b / "adapter_model.safetensors").exists() and not (a.work / "adapters/vqa_lora_bundle").exists():
+        shutil.copytree(b, a.work / "adapters/vqa_lora_bundle")
     print("[e2e] --skip-training: shipped adapters seeded, train stages marked done")
 
 
@@ -504,6 +527,9 @@ def main():
     want = None if a.stages == "all" else set(a.stages.split(","))
     for name, fn in STAGES:
         if want and name not in want:
+            continue
+        if name == "predict_bundle" and not a.with_bundle and not want:
+            print("[e2e] predict_bundle: skipped (--with-bundle not set)")
             continue
         if not want and (done / name).exists():
             print(f"[e2e] {name}: done, skip")
