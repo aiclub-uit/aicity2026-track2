@@ -175,9 +175,11 @@ def st_prep_test(a):
            "AICC26_WORK_ROOT_QWEN7B_CAP": a.work / "test_prep/caption"}
     run([sys.executable, CODE / "preprocess_vqa.py", "--workers", a.workers, "--force"], env=env)
     run([sys.executable, CODE / "preprocess_caption.py", "--workers", a.workers, "--force"], env=env)
+    new = json.load(open(a.work / "test_prep/vqa/processed/vqa_val.json"))
+    if not new:
+        sys.exit("prep_test produced 0 questions — check the test package under data/ (README §2)")
     ref = PKG / "data_meta/vqa_test.json"
     if ref.exists():
-        new = json.load(open(a.work / "test_prep/vqa/processed/vqa_val.json"))
         old = json.load(open(ref))
         same = len(new) == len(old) and all(
             n["id"] == o["id"] and n["question"] == o["question"] and n["options"] == o["options"]
@@ -196,6 +198,12 @@ def st_prep_train(a):
     flat = flatten_synwts_for_caption(a)
     run([sys.executable, CODE / "preprocess_caption.py", "--workers", a.workers, "--force"],
         env={**env, "AICC26_DATA_ROOT": flat})
+    # preprocess exits 0 even when the data root matches nothing — fail loudly here
+    for rel in ("vqa/processed/vqa_train.json", "caption/processed/caption_train.json"):
+        n = len(json.load(open(a.work / "train_prep" / rel)))
+        if not n:
+            sys.exit(f"prep_train produced 0 samples in {rel} — check data/synwts (README §2)")
+        print(f"[e2e] prep_train: {n:,} samples in {rel}")
 
 
 def st_train_base(a):
@@ -294,7 +302,10 @@ def st_cosmos_prep(a):
     cw.mkdir(parents=True, exist_ok=True)
     py_snippet("cosmos_restyle_prep", pat, "cmd_dump()", env=env)
     py_snippet("cosmos_restyle_prep", pat, "cmd_spec()", env=env)
-    print(f"[e2e] specs ready: {cw}/specs — restyle them with nvidia/Cosmos-Transfer2.5-2B "
+    n = len(list((cw / "specs").glob("*.json")))
+    if not n:
+        sys.exit("cosmos_prep produced 0 specs — check data/synwts (README §2)")
+    print(f"[e2e] {n} specs ready: {cw}/specs — restyle them with nvidia/Cosmos-Transfer2.5-2B "
           f"into {cw}/restyled, then run --stages train_bundle")
 
 
@@ -544,6 +555,9 @@ def seed_shipped_adapters(a):
             sys.exit(f"--skip-training: shipped adapter missing: {s}")
         if not d.exists():
             shutil.copytree(s, d)
+        else:
+            print(f"[e2e] --skip-training: {d} already exists and is KEPT "
+                  f"(delete it to use the shipped adapter instead)")
         (a.work / ".done" / stage).touch()
     b = src / "vqa_lora_bundle"
     if (b / "adapter_model.safetensors").exists() and shipped_adapter_ok(b) \
