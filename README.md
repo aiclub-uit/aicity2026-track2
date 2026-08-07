@@ -37,7 +37,9 @@ data/
 
 - SynWTS (~2.5 GB): `huggingface_hub.snapshot_download("mlcglab/synwts",
   repo_type="dataset", revision="9d6e7abce9a906e3e9bb6a2941dcce8b128654cf")`
-  — the download root is `data/synwts/` (revision pinned to the version we trained on).
+  — the download root is `data/synwts/` (revision pinned to the version we trained
+  on). The dataset is gated: log in to Hugging Face (`hf auth login`) and accept
+  the access terms on the dataset page first.
 - Public test + task package (~21 GB): distributed by the AI City Challenge
   organizers (Track 2).
 

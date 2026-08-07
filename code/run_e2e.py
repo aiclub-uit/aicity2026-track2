@@ -452,6 +452,10 @@ def st_train_caption(a):
 
 def st_predict_caption(a):
     (a.work / "caption").mkdir(parents=True, exist_ok=True)
+    cap_ad = a.work / "adapters/caption_dpo_lora"
+    if not (cap_ad / "adapter_model.safetensors").exists():
+        sys.exit(f"caption adapter missing: {cap_ad} — run train_caption (or --skip-training) first; "
+                 "predicting without it would silently use the raw base model")
     test_meta = a.work / "test_prep/caption/processed/caption_val.json"
     py_snippet("run_qwen35_caption", {"MODEL_ID": qwen_model()},
                "cmd_predict_submission(%r, %r)" % (
