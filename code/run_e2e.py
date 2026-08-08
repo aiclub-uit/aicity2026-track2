@@ -237,15 +237,11 @@ def st_train_base(a):
                   "AICC26_QWEN35_ADAPTER": a.work / "adapters/vqa_lora"})
 
 
-def st_predict_base(a):
-    sharded_predict(a.work / "test_prep/vqa/processed/vqa_val.json",
-                    a.work / "probs/base_bf16_probs.json", a.work / "vqa/base_answers.json",
-                    a.work / "adapters/vqa_lora", "bf16", batch=a.predict_batch or 2)
-
-
 def st_predict_8bit(a):
+    # the deployed chain predicted everything in 8-bit (bf16 was val-gated and
+    # rejected); base answers and both decode passes come from these probs
     sharded_predict(a.work / "test_prep/vqa/processed/vqa_val.json",
-                    a.work / "probs/base_8bit_probs.json", a.work / "vqa/answers_8bit_unused.json",
+                    a.work / "probs/base_8bit_probs.json", a.work / "vqa/base_answers.json",
                     a.work / "adapters/vqa_lora", "8bit", batch=a.predict_batch or 4)
 
 
@@ -261,7 +257,7 @@ def st_compose_wsd2(a):
         wsd.cmd_mine()
     finally:
         shutil.rmtree(shim, ignore_errors=True)
-    wsd.cmd_decode(T, str(a.work / "probs/base_bf16_probs.json"),
+    wsd.cmd_decode(T, str(a.work / "probs/base_8bit_probs.json"),
                    str(a.work / "vqa/base_answers.json"),
                    str(a.work / "vqa/answers_wsd.json"), set(SPATIAL.split(",")))
     wsd.cmd_decode(T, str(a.work / "probs/base_8bit_probs.json"),
@@ -594,7 +590,7 @@ def st_stitch(a):
 
 
 STAGES = [("prep_test", st_prep_test), ("prep_train", st_prep_train),
-          ("train_base", st_train_base), ("predict_base", st_predict_base),
+          ("train_base", st_train_base),
           ("predict_8bit", st_predict_8bit), ("compose_wsd2", st_compose_wsd2),
           ("train_ctx", st_train_ctx), ("predict_ctx", st_predict_ctx),
           ("cosmos_prep", st_cosmos_prep), ("train_bundle", st_train_bundle),
@@ -654,7 +650,8 @@ def main():
                     help="use the shipped adapters in artifacts/ instead of retraining")
     ap.add_argument("--predict-batch", type=int, default=0,
                     help="prediction batch size; 0 = defaults sized for 32 GB VRAM "
-                         "(bf16: 2, 8-bit: 4) — raise on larger GPUs, must divide 2000")
+                         "(8-bit: 4, bf16 bundle/caption: 2) — raise on larger GPUs, "
+                         "must divide 2000")
     ap.add_argument("--list", action="store_true")
     a = ap.parse_args()
     a.with_bundle = not a.no_bundle
