@@ -33,7 +33,7 @@ is covered by the expected-score band in README §4.
 (README §3, Option A or B) executes the stages
 
 ```
-prep_test → prep_train → train_base → predict_8bit →
+prep_test → prep_train → train_base → predict_base → predict_8bit →
 compose_wsd2 → train_ctx → predict_ctx → predict_bundle → compose_vqa →
 train_caption → predict_caption → stitch
 ```
