@@ -280,18 +280,21 @@ def cmd_train_dpo():
     from PIL import Image
     from peft import PeftModel
     from trl import DPOTrainer, DPOConfig
-    from datasets import Dataset
+    from datasets import Dataset, Sequence
+    from datasets import Image as HFImage
     proc, model = _load(for_train=True)
     model = PeftModel.from_pretrained(model, str(SFT_SRC), is_trainable=True)
     pairs = json.load(open(DPO_PAIRS))
     def to_row(p):
         return {
-            "images": [Image.open(x).convert("RGB") for x in p["images"]],
+            "images": p["images"],
             "prompt": [{"role": "user", "content": [{"type": "image"} for _ in p["images"]] + [{"type": "text", "text": p["q"]}]}],
             "chosen": [{"role": "assistant", "content": [{"type": "text", "text": p["chosen"]}]}],
             "rejected": [{"role": "assistant", "content": [{"type": "text", "text": p["rejected"]}]}],
         }
-    ds = Dataset.from_list([to_row(p) for p in pairs])
+    # image paths + lazy Image feature: eager PIL rows overflow arrow's 2 GB
+    # binary-column offsets at this pair count (997 pairs / 3,004 images)
+    ds = Dataset.from_list([to_row(p) for p in pairs]).cast_column("images", Sequence(HFImage()))
     cfg = DPOConfig(output_dir=str(DPO_OUT), per_device_train_batch_size=1, gradient_accumulation_steps=8,
                     num_train_epochs=1.0, learning_rate=5e-6,
                     beta=float(os.environ.get("AICC26_DPO_BETA", "0.1")), bf16=True, logging_steps=10,
