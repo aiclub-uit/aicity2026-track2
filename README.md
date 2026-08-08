@@ -84,10 +84,9 @@ the run is resumable (append `--list` for stage status).
 
 Batch sizes default to the 32 GB VRAM minimum. On larger GPUs (≥ 48 GB) append
 `--predict-batch 8` (any divisor of 2000) to speed up the prediction stages.
-On GPUs under 40 GB two training steps automatically drop the frozen base
-precision (the original settings need more than 32 GB): `train_ctx` trains
-4-bit, and the caption DPO step trains 8-bit. All predictions keep the
-original precisions either way.
+On GPUs under 40 GB the `train_ctx` and caption-DPO steps automatically train
+on a 4-bit frozen base (their original settings need more than 32 GB). All
+predictions keep the original precisions either way.
 
 Both options reproduce our submitted best VQA by default: the `predict_bundle`
 stage — a standard bf16 prediction with the `vqa_lora_bundle` adapter — routes

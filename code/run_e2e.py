@@ -446,9 +446,9 @@ def st_train_caption(a):
     q = "bf16" if a.quant_caption == "auto" else a.quant_caption
     qd = a.quant_caption
     if qd == "auto":
-        qd = "bf16" if gpu_mb() >= 40_000 else "8bit"
-        if qd == "8bit":
-            print(f"[e2e] train_caption DPO: {gpu_mb()} MiB VRAM -> 8-bit base")
+        qd = "bf16" if gpu_mb() >= 40_000 else "4bit"
+        if qd == "4bit":
+            print(f"[e2e] train_caption DPO: {gpu_mb()} MiB VRAM -> 4-bit base")
     env = {"AICC26_QWEN35_QUANT": q,
            "AICC26_QWEN35_CAP_ADAPTER": a.work / "adapters/caption_lora",
            "AICC26_SFT_SRC": a.work / "adapters/caption_lora",
@@ -593,7 +593,7 @@ def main():
     ap.add_argument("--caption-limit", type=int, default=0, help="smoke: cap caption samples")
     ap.add_argument("--quant-caption", default="auto",
                     choices=["auto", "bf16", "8bit", "4bit"],
-                    help="auto = bf16, except the DPO step drops to 8-bit under 40 GB VRAM")
+                    help="auto = bf16, except the DPO step drops to 4-bit under 40 GB VRAM")
     ap.add_argument("--no-bundle", action="store_true",
                     help="skip the bundle (reality-transfer) route; the submitted best VQA uses it")
     ap.add_argument("--skip-training", action="store_true",
