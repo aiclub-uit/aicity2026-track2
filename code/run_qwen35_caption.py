@@ -282,6 +282,11 @@ def cmd_train_dpo():
     from trl import DPOTrainer, DPOConfig
     from datasets import Dataset, Sequence
     from datasets import Image as HFImage
+    # TRL's per-token entropy is a logging-only metric, but materializing it costs
+    # ~4.3 GB fp32 on this vocab and OOMs 32 GB cards — zero it out; the DPO loss
+    # itself is untouched
+    import trl.trainer.dpo_trainer as _dt
+    _dt.entropy_from_logits = lambda logits, *a, **k: logits.new_zeros(logits.shape[:-1])
     proc, model = _load(for_train=True)
     model = PeftModel.from_pretrained(model, str(SFT_SRC), is_trainable=True)
     pairs = json.load(open(DPO_PAIRS))
