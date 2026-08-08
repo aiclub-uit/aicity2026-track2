@@ -20,15 +20,17 @@ _QWEN = None
 
 
 def qwen_model() -> str:
-    """Local snapshot of the pinned Qwen revision (falls back to the hub name)."""
+    """Local snapshot of the pinned Qwen revision; hard-fails rather than
+    silently running on an unpinned revision."""
     global _QWEN
     if _QWEN is None:
         try:
             from huggingface_hub import snapshot_download
             _QWEN = snapshot_download("Qwen/Qwen3.5-9B", revision=QWEN_REV)
         except Exception as e:
-            print(f"[e2e] could not pin Qwen revision ({e}) -> using latest from the hub")
-            _QWEN = "Qwen/Qwen3.5-9B"
+            sys.exit(f"could not resolve Qwen/Qwen3.5-9B@{QWEN_REV} ({e}) — "
+                     "check network/HF auth and retry; running unpinned would "
+                     "not reproduce the submitted system")
     return _QWEN
 
 
@@ -44,7 +46,10 @@ def load_mod(name: str, attrs: dict | None = None):
 
 def run(cmd, env=None, cwd=None):
     print(f"[e2e] $ {' '.join(str(c) for c in cmd)}", flush=True)
-    e = dict(os.environ)
+    # drop stray tuning vars from the caller's shell — only explicitly passed
+    # AICC26_*/QWEN35_*/CAPTION_* values may reach the competition code
+    e = {k: v for k, v in os.environ.items()
+         if not k.startswith(("AICC26_", "QWEN35_", "CAPTION_"))}
     e.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
     e.update({k: str(v) for k, v in (env or {}).items()})
     subprocess.run([str(c) for c in cmd], env=e, cwd=str(cwd or CODE), check=True)
@@ -110,9 +115,14 @@ def sharded_predict(samples_json, out_probs, out_answers, adapter, quant,
     if shard % batch:
         sys.exit(f"--predict-batch {batch} must divide the shard size ({shard})")
     aw = Path(adapter) / "adapter_model.safetensors"
+    if not aw.exists():
+        sys.exit(f"adapter missing: {adapter} — run the train stages (or --skip-training) first; "
+                 "predicting without it would silently use the raw base model")
     prov = {"adapter": str(adapter), "quant": quant, "qtypes": qtypes,
             "batch": batch, "shard": shard, "n": len(data),
-            "adapter_fp": [aw.stat().st_size, int(aw.stat().st_mtime)] if aw.exists() else None}
+            "model": str(qwen_model()),
+            "input_md5": hashlib.md5(open(samples_json, "rb").read()).hexdigest(),
+            "adapter_fp": [aw.stat().st_size, int(aw.stat().st_mtime)]}
     pv = workdir / "provenance.json"
     if pv.exists() and json.load(open(pv)) != prov:
         sys.exit(f"shard cache {workdir} was produced with a different config "
@@ -123,9 +133,17 @@ def sharded_predict(samples_json, out_probs, out_answers, adapter, quant,
            "QWEN35_BATCH": batch, **(env_extra or {})}
     shards = [(i, data[i:i + shard]) for i in range(0, len(data), shard)]
     print(f"[e2e] predict {len(data):,} samples, {len(shards)} shards, quant={quant}", flush=True)
+    def shard_done(off):
+        for f in (workdir / f"probs_{off:06d}.json", workdir / f"preds_{off:06d}.json"):
+            try:
+                json.load(open(f))
+            except Exception:
+                return False
+        return True
+
     for k, (off, chunk) in enumerate(shards):
         pf = workdir / f"probs_{off:06d}.json"
-        if pf.exists() and pf.stat().st_size > 2:
+        if shard_done(off):
             continue
         sf = workdir / f"samples_{off:06d}.json"
         json.dump(chunk, open(sf, "w"))
@@ -152,12 +170,16 @@ def st_prep_test(a):
         if not p.exists():
             sys.exit(f"missing input: {p}\nsee README.md §2 for the expected layout")
     bbox = ext / "SubTask1-Caption/WTS_DATASET_PUBLIC_TEST_BBOX"
-    if not bbox.exists():
+    # content check, not dir-exists: an interrupted extractall leaves a partial
+    # tree that would otherwise be accepted forever
+    if not (bbox / "external").exists():
         z = Path(str(bbox) + ".zip")
         if not z.exists():
             sys.exit(f"missing input: {z}\nsee README.md §2 for the expected layout")
         print(f"[e2e] extracting {z.name}")
         zipfile.ZipFile(z).extractall(bbox.parent)
+        if not (bbox / "external").exists():
+            sys.exit(f"{z.name} did not produce {bbox}/external — unexpected zip layout")
     troot = a.work / "test_root"
     m = load_mod("prepare_test_root")
     m.EXT_ROOT, m.INF_ROOT = ext, inf
@@ -231,12 +253,14 @@ def st_compose_wsd2(a):
     T = str(a.work / "test_prep/vqa/processed/vqa_val.json")
     import tempfile
     shim = Path(tempfile.mkdtemp(prefix="e2e_mine_"))
-    (shim / "output_qwen7b/processed").mkdir(parents=True)
-    shutil.copy(a.work / "train_prep/vqa/processed/vqa_train.json",
-                shim / "output_qwen7b/processed/vqa_train.json")
-    wsd = load_mod("wsd", {"WORK": a.work / "probs", "CODE": shim})
-    wsd.cmd_mine()
-    shutil.rmtree(shim, ignore_errors=True)
+    try:
+        (shim / "output_qwen7b/processed").mkdir(parents=True)
+        shutil.copy(a.work / "train_prep/vqa/processed/vqa_train.json",
+                    shim / "output_qwen7b/processed/vqa_train.json")
+        wsd = load_mod("wsd", {"WORK": a.work / "probs", "CODE": shim})
+        wsd.cmd_mine()
+    finally:
+        shutil.rmtree(shim, ignore_errors=True)
     wsd.cmd_decode(T, str(a.work / "probs/base_bf16_probs.json"),
                    str(a.work / "vqa/base_answers.json"),
                    str(a.work / "vqa/answers_wsd.json"), set(SPATIAL.split(",")))
@@ -252,6 +276,7 @@ def st_train_ctx(a):
                    str(a.work / "train_prep/vqa/processed/vqa_train.json"),
                    str(d / "vqa_train.json")),
                raw=ctx_patches(a))
+    ctx_evidence_check(d / "vqa_train.json")
     quant = "8bit" if gpu_mb() >= 40_000 else "4bit"
     if quant == "4bit":
         # 8-bit (the original setting) OOMs on the 5-image ctx samples within 32 GB;
@@ -273,6 +298,7 @@ def st_predict_ctx(a):
                    str(d / "vqa_test_ctx.json"),
                    str(a.work / "vqa/answers_wsd2.json")),
                raw=ctx_patches(a))
+    ctx_evidence_check(d / "vqa_test_ctx.json")
     sharded_predict(d / "vqa_test_ctx.json", a.work / "probs/ctx_probs.json",
                     a.work / "vqa/ctx_answers_unused.json",
                     a.work / "adapters/vqa_lora_ctx", "8bit", qtypes=SPATIAL,
@@ -300,8 +326,21 @@ def cosmos_paths(a):
     return cw, pat, env
 
 
+def ctx_evidence_check(path):
+    """A wrong bbox layout yields all-'unavailable' scene evidence with no error."""
+    txt = open(path, "rb").read()
+    n = txt.count(b"Normalized boxes")
+    if n == 0:
+        sys.exit(f"ctx build found 0 bbox evidence in {path} — check "
+                 "data/synwts/data/annotations/bbox_annotated (README §2)")
+    print(f"[e2e] ctx evidence: {n:,} samples with bbox in {Path(path).name}")
+
+
 def st_cosmos_prep(a):
     cw, pat, env = cosmos_paths(a)
+    if not (a.work / "train_prep/vqa/processed/vqa_train.json").exists():
+        sys.exit("cosmos_prep needs the prep_train outputs — run "
+                 "--stages prep_test,prep_train (or a full Option A/B run) first")
     cw.mkdir(parents=True, exist_ok=True)
     py_snippet("cosmos_restyle_prep", pat, "cmd_dump()", env=env)
     py_snippet("cosmos_restyle_prep", pat, "cmd_spec()", env=env)
@@ -314,11 +353,17 @@ def st_cosmos_prep(a):
 
 def st_train_bundle(a):
     cw, pat, env = cosmos_paths(a)
-    restyled = [f for f in (cw / "restyled").glob("*.jpg")
-                if "control_edge" not in f.name] if (cw / "restyled").exists() else []
-    if not restyled:
-        sys.exit(f"no restyled frames in {cw}/restyled — run --stages cosmos_prep, restyle the "
-                 "specs with Cosmos (README option C), then re-run this stage")
+    spec_keys = {p.stem for p in (cw / "specs").glob("*.json")} if (cw / "specs").exists() else set()
+    restyled = {f.stem for f in (cw / "restyled").glob("*.jpg")
+                if "control_edge" not in f.name} if (cw / "restyled").exists() else set()
+    matched = len(restyled & spec_keys)
+    # the deployed chain required >=1300/1447 restyled; anything less means the
+    # Cosmos outputs are misnamed or incomplete and the adapter would silently
+    # train on mostly non-restyled frames
+    if not spec_keys or matched < 0.9 * len(spec_keys):
+        sys.exit(f"restyled frames matching spec names: {matched}/{len(spec_keys)} — "
+                 f"Cosmos outputs must be named <spec_name>.jpg directly under {cw}/restyled "
+                 "(README Option C step 2); re-check the restyle output layout")
     py_snippet("cosmos_restyle_prep", pat, "cmd_rebuild()", env=env)
     dr = load_mod("dr_prep")
     from multiprocessing.pool import ThreadPool
@@ -472,7 +517,8 @@ def st_predict_caption(a):
     py_snippet("run_qwen35_caption", {"MODEL_ID": qwen_model()},
                "cmd_predict_submission(%r, %r)" % (
                    str(test_meta), str(a.work / "caption/caption_test_preds.json")),
-               env={"AICC26_QWEN35_QUANT": "bf16" if a.quant_caption == "auto" else a.quant_caption,
+               env={"QWEN35_BATCH": a.predict_batch or 2,
+                    "AICC26_QWEN35_QUANT": "bf16" if a.quant_caption == "auto" else a.quant_caption,
                     "AICC26_CAP_PRED_ADAPTER": a.work / "adapters/caption_dpo_lora"})
     preds = json.load(open(a.work / "caption/caption_test_preds.json"))
     meta = json.load(open(test_meta))
@@ -519,8 +565,14 @@ def st_stitch(a):
         fs5.cmd_test(str(w / "v4"), str(w / "v5"), str(a.work / "vqa/answers_wsd2.json"),
                      fs5.V5A)
         cap = json.load(open(w / "v5/subtask1_captioning.json"))
-        need = {(s_["scenario"], str(s_["phase_label"]))
-                for s_ in json.load(open(a.work / "test_prep/caption/processed/caption_val.json"))}
+        ref = PKG / "data_meta/caption_pairs.json"
+        if ref.exists():
+            # frozen official reference — catches scenarios silently dropped
+            # during preprocessing, which the self-derived set cannot
+            need = {tuple(p) for p in json.load(open(ref))}
+        else:
+            need = {(s_["scenario"], str(s_["phase_label"]))
+                    for s_ in json.load(open(a.work / "test_prep/caption/processed/caption_val.json"))}
         pairs = [(scn, str((e.get("labels") or [""])[0]))
                  for scn, es in cap.items() for e in es]
         have = set(pairs)
@@ -574,7 +626,9 @@ def seed_shipped_adapters(a):
         else:
             print(f"[e2e] --skip-training: {d} already exists and is KEPT "
                   f"(delete it to use the shipped adapter instead)")
-        (a.work / ".done" / stage).touch()
+        # "seeded" markers are honored only under --skip-training; a later plain
+        # run re-trains instead of silently reusing the shipped adapters
+        (a.work / ".done" / stage).write_text("seeded")
     b = src / "vqa_lora_bundle"
     if (b / "adapter_model.safetensors").exists() and shipped_adapter_ok(b) \
             and not (a.work / "adapters/vqa_lora_bundle").exists():
@@ -604,6 +658,13 @@ def main():
     ap.add_argument("--list", action="store_true")
     a = ap.parse_args()
     a.with_bundle = not a.no_bundle
+    names = [n for n, _ in STAGES]
+    if a.stages != "all":
+        bad = set(a.stages.split(",")) - set(names)
+        if bad or not a.stages:
+            sys.exit(f"unknown stage(s): {sorted(bad)} — valid: {','.join(names)}")
+    if a.predict_batch and 2000 % a.predict_batch:
+        sys.exit(f"--predict-batch {a.predict_batch} must divide 2000")
     done = a.work / ".done"; done.mkdir(parents=True, exist_ok=True)
     for sub in ("probs", "vqa", "adapters", "caption"):
         (a.work / sub).mkdir(parents=True, exist_ok=True)
@@ -623,11 +684,14 @@ def main():
             print("[e2e] predict_bundle: skipped (--no-bundle)")
             continue
         if not want and (done / name).exists():
-            print(f"[e2e] {name}: done, skip")
-            continue
+            if not a.skip_training and (done / name).read_text() == "seeded":
+                print(f"[e2e] {name}: previously satisfied by shipped adapters -> retraining")
+            else:
+                print(f"[e2e] {name}: done, skip")
+                continue
         print(f"\n[e2e] ======== STAGE {name} ========", flush=True)
         fn(a)
-        (done / name).touch()
+        (done / name).write_text("")
     print("\n[e2e] all requested stages finished")
 
 

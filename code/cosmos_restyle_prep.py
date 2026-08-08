@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 import json, os, sys, argparse, subprocess
-sys.path.insert(0, '/workspace/AICC/code')
+sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parent))
 import cv2
 try:
     import preprocess_vqa as R7
@@ -138,8 +138,8 @@ def cmd_rebuild():
         ldst = f'{DEST}/frames_local/{r["rel"]}/{r["gname"]}'
         os.makedirs(os.path.dirname(gdst), exist_ok=True)
         os.makedirs(os.path.dirname(ldst), exist_ok=True)
-        if os.path.exists(sty):
-            img = cv2.imread(sty)
+        img = cv2.imread(sty) if os.path.exists(sty) else None
+        if img is not None:
             sx, sy = img.shape[1] / r['w'], img.shape[0] / r['h']
             def scale_bb(b):
                 if b is None: return None

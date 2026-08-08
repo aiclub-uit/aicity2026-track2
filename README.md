@@ -110,17 +110,22 @@ docker run --rm --gpus all -v "$PWD:/pkg" -v team24-hf:/root/.cache/huggingface 
   team24-e2e --stages cosmos_prep
 
 # 2. (external) restyle work/cosmos/specs/*.json with Cosmos-Transfer2.5-2B,
-#    writing outputs to work/cosmos/restyled/   (~4 h on a 96 GB GPU)
+#    writing outputs named <spec_name>.jpg directly under work/cosmos/restyled/
+#    (~4 h on a 96 GB GPU)
 
 # 3. rebuild the frame tree, overlay domain randomization, retrain (~6 h)
 docker run --rm --gpus all -v "$PWD:/pkg" -v team24-hf:/root/.cache/huggingface \
   team24-e2e --stages train_bundle
 
-# 4. redo the bundle prediction with the fresh adapter, then finish
-rm -rf work/probs/bundle_probs.json.shards work/.done/predict_bundle
+# 4. redo the bundle prediction and composition with the fresh adapter
+rm -rf work/probs/bundle_probs.json.shards \
+       work/.done/predict_bundle work/.done/compose_vqa
 docker run --rm --gpus all --shm-size 8g \
   -v "$PWD:/pkg" -v team24-hf:/root/.cache/huggingface team24-e2e
 ```
+
+Step 1 needs the preprocessing outputs of a prior Option A/B run (the stage
+checks and says so).
 
 ## 4. Expected results
 
