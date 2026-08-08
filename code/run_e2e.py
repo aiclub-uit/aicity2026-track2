@@ -252,17 +252,11 @@ def st_train_ctx(a):
                    str(a.work / "train_prep/vqa/processed/vqa_train.json"),
                    str(d / "vqa_train.json")),
                raw=ctx_patches(a))
-    try:
-        mb = int(subprocess.run(["nvidia-smi", "--query-gpu=memory.total",
-                                 "--format=csv,noheader,nounits"],
-                                capture_output=True, text=True).stdout.split("\n")[0])
-    except Exception:
-        mb = 0
-    quant = "8bit" if mb >= 40_000 else "4bit"
+    quant = "8bit" if gpu_mb() >= 40_000 else "4bit"
     if quant == "4bit":
         # 8-bit (the original setting) OOMs on the 5-image ctx samples within 32 GB;
         # 4-bit peaks ~28.8 GB on the same samples
-        print(f"[e2e] train_ctx: {mb} MiB VRAM -> 4-bit frozen base")
+        print(f"[e2e] train_ctx: {gpu_mb()} MiB VRAM -> 4-bit frozen base")
     cmd = [sys.executable, "-u", CODE / "run_qwen35_vqa.py", "train"]
     if a.train_limit:
         cmd += ["--limit", a.train_limit]
@@ -283,6 +277,15 @@ def st_predict_ctx(a):
                     a.work / "vqa/ctx_answers_unused.json",
                     a.work / "adapters/vqa_lora_ctx", "8bit", qtypes=SPATIAL,
                     batch=a.predict_batch or 4)
+
+
+def gpu_mb() -> int:
+    try:
+        return int(subprocess.run(["nvidia-smi", "--query-gpu=memory.total",
+                                   "--format=csv,noheader,nounits"],
+                                  capture_output=True, text=True).stdout.split("\n")[0])
+    except Exception:
+        return 0
 
 
 def cosmos_paths(a):
@@ -438,7 +441,15 @@ def st_compose_vqa(a):
 
 
 def st_train_caption(a):
-    env = {"AICC26_QWEN35_QUANT": a.quant_caption,
+    # SFT and DPO-pair building fit bf16 on 32 GB; only the DPO backward does not,
+    # so "auto" downgrades just that step on smaller cards
+    q = "bf16" if a.quant_caption == "auto" else a.quant_caption
+    qd = a.quant_caption
+    if qd == "auto":
+        qd = "bf16" if gpu_mb() >= 40_000 else "8bit"
+        if qd == "8bit":
+            print(f"[e2e] train_caption DPO: {gpu_mb()} MiB VRAM -> 8-bit base")
+    env = {"AICC26_QWEN35_QUANT": q,
            "AICC26_QWEN35_CAP_ADAPTER": a.work / "adapters/caption_lora",
            "AICC26_SFT_SRC": a.work / "adapters/caption_lora",
            "AICC26_DPO_OUT": a.work / "adapters/caption_dpo_lora",
@@ -447,7 +458,8 @@ def st_train_caption(a):
     lim = int(a.caption_limit or 0)
     py_snippet("run_qwen35_caption", {"DATA": data, "MODEL_ID": qwen_model()}, f"cmd_train({lim or None})", env=env)
     py_snippet("run_qwen35_caption", {"DATA": data, "MODEL_ID": qwen_model()}, f"cmd_build_dpo({lim})", env=env)
-    py_snippet("run_qwen35_caption", {"DATA": data, "MODEL_ID": qwen_model()}, "cmd_train_dpo()", env=env)
+    py_snippet("run_qwen35_caption", {"DATA": data, "MODEL_ID": qwen_model()}, "cmd_train_dpo()",
+               env={**env, "AICC26_QWEN35_QUANT": qd})
 
 
 def st_predict_caption(a):
@@ -460,7 +472,7 @@ def st_predict_caption(a):
     py_snippet("run_qwen35_caption", {"MODEL_ID": qwen_model()},
                "cmd_predict_submission(%r, %r)" % (
                    str(test_meta), str(a.work / "caption/caption_test_preds.json")),
-               env={"AICC26_QWEN35_QUANT": a.quant_caption,
+               env={"AICC26_QWEN35_QUANT": "bf16" if a.quant_caption == "auto" else a.quant_caption,
                     "AICC26_CAP_PRED_ADAPTER": a.work / "adapters/caption_dpo_lora"})
     preds = json.load(open(a.work / "caption/caption_test_preds.json"))
     meta = json.load(open(test_meta))
@@ -579,7 +591,9 @@ def main():
     ap.add_argument("--workers", type=int, default=16, help="preprocess workers")
     ap.add_argument("--train-limit", type=int, default=0, help="smoke: cap train samples")
     ap.add_argument("--caption-limit", type=int, default=0, help="smoke: cap caption samples")
-    ap.add_argument("--quant-caption", default="bf16", choices=["bf16", "8bit", "4bit"])
+    ap.add_argument("--quant-caption", default="auto",
+                    choices=["auto", "bf16", "8bit", "4bit"],
+                    help="auto = bf16, except the DPO step drops to 8-bit under 40 GB VRAM")
     ap.add_argument("--no-bundle", action="store_true",
                     help="skip the bundle (reality-transfer) route; the submitted best VQA uses it")
     ap.add_argument("--skip-training", action="store_true",
